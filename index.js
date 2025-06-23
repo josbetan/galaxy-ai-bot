@@ -10,8 +10,7 @@ app.post("/webhook", async (req, res) => {
   const userMessage = req.body.Body || "";
   const from = req.body.From || "";
 
-  const prompt = `Eres el asistente virtual de Distribuciones Galaxy. El cliente escribió: "${userMessage}". Responde directo y claro sin repetir saludos si ya estás conversando. Sé amable, profesional y útil.`;
-
+  const prompt = `Eres el asistente virtual de Distribuciones Galaxy. El cliente escribió: "${userMessage}". Responde de forma amable y profesional, sin repetir saludos innecesarios como "Hola" o "Gracias por contactarnos" en cada mensaje si ya estás en una conversación. Sé directo, útil, y guía al cliente para completar su compra o resolver su duda. Si menciona un producto, intenta preguntar por la cantidad, marca, color, referencia o confirmar detalles.`;
   try {
     const response = await axios.post(
       "https://api.openai.com/v1/chat/completions",
