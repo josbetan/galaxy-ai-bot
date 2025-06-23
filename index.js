@@ -10,7 +10,7 @@ app.post("/webhook", async (req, res) => {
   const userMessage = req.body.Body || "";
   const from = req.body.From || "";
 
-  const prompt = `Eres el asistente virtual de Distribuciones Galaxy. Un cliente escribió: "${userMessage}". Responde de manera amable y profesional.`;
+  const prompt = `Eres el asistente virtual de Distribuciones Galaxy. El cliente escribió: "${userMessage}". Responde directo y claro sin repetir saludos si ya estás conversando. Sé amable, profesional y útil.`;
 
   try {
     const response = await axios.post(
