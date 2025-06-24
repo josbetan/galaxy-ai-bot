@@ -1,31 +1,72 @@
 const express = require("express");
 const axios = require("axios");
+const { MongoClient } = require("mongodb");
 require("dotenv").config();
 
 const app = express();
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
+const client = new MongoClient(process.env.MONGODB_URI);
+let db;
+
+async function connectToDB() {
+  try {
+    await client.connect();
+    db = client.db("Galaxy");
+    console.log("Conectado a MongoDB");
+  } catch (error) {
+    console.error("Error conectando a MongoDB:", error);
+  }
+}
+connectToDB();
+
 app.post("/webhook", async (req, res) => {
   const userMessage = req.body.Body || "";
   const from = req.body.From || "";
 
+  let productInfo = "";
+
+  try {
+    const products = db.collection("Products");
+    const regex = new RegExp(userMessage, "i");
+    const product = await products.findOne({ name: { $regex: regex } });
+
+    if (product) {
+      productInfo = `\n\n🛒 Producto encontrado:\n• Nombre: ${product.name}\n• Precio: $${product.price} COP por ${product.unit}\n• Disponibles: ${product.stock}`;
+    }
+  } catch (err) {
+    console.error("Error consultando MongoDB:", err.message);
+  }
+
+  const conversationCollection = db.collection("Conversations");
+
+  // Recuperar historial de últimos 19 mensajes anteriores (más el actual = 20)
+  const previousMessages = await conversationCollection
+    .find({ from })
+    .sort({ timestamp: -1 })
+    .limit(19)
+    .toArray();
+
   const messages = [
     {
       role: "system",
-      content: `Eres el asistente virtual de Distribuciones Galaxy, una empresa colombiana especializada en la venta de insumos para impresión de avisos de gran formato y pasacalles. Comercializamos tintas ecosolventes, vinilos, banners, vinilo textil, polarizados, impresoras de gran formato, repuestos, cabezales y otros materiales gráficos dirigidos a empresas y profesionales del sector.
-
-Tu única función es brindar atención formal y profesional a consultas comerciales: productos, precios, pedidos, formas de pago, disponibilidad o atención postventa.
-
-Si el cliente realiza preguntas que no están relacionadas con el negocio (como salud, política, religión o temas personales), debes responder de forma cortés pero firme indicando que esta línea es exclusivamente para atención comercial de Distribuciones Galaxy.
-
-Evita saludos innecesarios como "Hola" o "Gracias por contactarnos" si ya estás dentro de una conversación. Sé directo, útil y profesional.`
+      content: `Eres el asistente virtual de Distribuciones Galaxy. Solo brindas atención comercial sobre productos, precios, pedidos, disponibilidad o postventa.`
     },
+    ...previousMessages.reverse().map(m => ({ role: m.role, content: m.content })),
     {
       role: "user",
       content: userMessage
     }
   ];
+
+  // Guardar mensaje del usuario
+  await conversationCollection.insertOne({
+    from,
+    role: "user",
+    content: userMessage,
+    timestamp: new Date()
+  });
 
   try {
     const response = await axios.post(
@@ -42,11 +83,24 @@ Evita saludos innecesarios como "Hola" o "Gracias por contactarnos" si ya estás
       }
     );
 
-    const reply = response.data.choices[0].message.content;
+    let reply = response.data.choices[0].message.content;
+
+    if (productInfo) {
+      reply += productInfo;
+    }
+
+    // Guardar respuesta del asistente
+    await conversationCollection.insertOne({
+      from,
+      role: "assistant",
+      content: reply,
+      timestamp: new Date()
+    });
+
     res.set("Content-Type", "text/plain");
     return res.send(reply);
   } catch (err) {
-    console.error("Error:", err.response?.data || err.message);
+    console.error("Error con OpenAI:", err.response?.data || err.message);
     return res.send("Ocurrió un error. Por favor intenta más tarde.");
   }
 });
