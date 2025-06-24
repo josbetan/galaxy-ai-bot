@@ -30,10 +30,13 @@ app.post("/webhook", async (req, res) => {
   try {
     const products = db.collection("Products");
 
-    // Primero intenta buscar en el array de keywords
-    let product = await products.findOne({ keywords: { $in: [userMessage.toLowerCase()] } });
+    // Divide el mensaje del usuario en palabras clave
+    const words = userMessage.toLowerCase().split(/\s+/);
 
-    // Si no lo encuentra, busca por coincidencia parcial en el nombre
+    // Busca coincidencia en el campo keywords
+    let product = await products.findOne({ keywords: { $in: words } });
+
+    // Si no encuentra, busca por nombre con regex
     if (!product) {
       const regex = new RegExp(userMessage, "i");
       product = await products.findOne({ name: { $regex: regex } });
@@ -57,7 +60,7 @@ app.post("/webhook", async (req, res) => {
   const messages = [
     {
       role: "system",
-      content: `Eres el asistente virtual de Distribuciones Galaxy, habla amablemente y servicial. Solo brindas atención comercial sobre productos, precios, pedidos, disponibilidad o postventa.`
+      content: `Eres un asistente virtual muy amable, cálido y servicial de Distribuciones Galaxy. Siempre saludas cordialmente y brindas atención comercial relacionada con productos, precios, pedidos, disponibilidad y postventa. Usa un lenguaje profesional pero cercano.`
     },
     ...previousMessages.reverse().map(m => ({ role: m.role, content: m.content })),
     {
@@ -113,3 +116,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Servidor corriendo en puerto", PORT);
 });
+
