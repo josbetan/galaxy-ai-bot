@@ -10,20 +10,29 @@ app.post("/webhook", async (req, res) => {
   const userMessage = req.body.Body || "";
   const from = req.body.From || "";
 
-  onst prompt = `
-Eres el asistente virtual de Distribuciones Galaxy, una empresa colombiana especializada en la venta de insumos para impresión de avisos de gran formato y pasacalles. Comercializamos tintas ecosolventes, vinilos, banners, vinilo textil, polarizados, impresoras de gran formato, repuestos, cabezales y otros materiales gráficos dirigidos a empresas y profesionales del sector.
+  const messages = [
+    {
+      role: "system",
+      content: `Eres el asistente virtual de Distribuciones Galaxy, una empresa colombiana especializada en la venta de insumos para impresión de avisos de gran formato y pasacalles. Comercializamos tintas ecosolventes, vinilos, banners, vinilo textil, polarizados, impresoras de gran formato, repuestos, cabezales y otros materiales gráficos dirigidos a empresas y profesionales del sector.
 
 Tu única función es brindar atención formal y profesional a consultas comerciales: productos, precios, pedidos, formas de pago, disponibilidad o atención postventa.
 
-Si el cliente realiza preguntas que no están relacionadas con el negocio, debes responder de forma cortés pero firme indicando que esta línea es exclusiva para atención comercial de Distribuciones Galaxy.
+Si el cliente realiza preguntas que no están relacionadas con el negocio (como salud, política, religión o temas personales), debes responder de forma cortés pero firme indicando que esta línea es exclusivamente para atención comercial de Distribuciones Galaxy.
 
-El cliente escribió: "${userMessage}". Responde de forma amable y profesional, sin repetir saludos innecesarios como "Hola" o "Gracias por contactarnos" en cada mensaje si ya estás en una conversación. Sé directo, útil, y guía al cliente para completar su compra o resolver su duda. Si menciona un producto, intenta preguntar por la cantidad, marca, color, refer o confirmar detalles. Enfocándote únicamente en brindar ayuda relacionada al negocio`;
+Evita saludos innecesarios como "Hola" o "Gracias por contactarnos" si ya estás dentro de una conversación. Sé directo, útil y profesional.`
+    },
+    {
+      role: "user",
+      content: userMessage
+    }
+  ];
+
   try {
     const response = await axios.post(
       "https://api.openai.com/v1/chat/completions",
       {
         model: "gpt-3.5-turbo",
-        messages: [{ role: "user", content: prompt }]
+        messages: messages
       },
       {
         headers: {
