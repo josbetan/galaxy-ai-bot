@@ -29,8 +29,15 @@ app.post("/webhook", async (req, res) => {
 
   try {
     const products = db.collection("Products");
-    const regex = new RegExp(userMessage, "i");
-    const product = await products.findOne({ name: { $regex: regex } });
+
+    // Primero intenta buscar en el array de keywords
+    let product = await products.findOne({ keywords: { $in: [userMessage.toLowerCase()] } });
+
+    // Si no lo encuentra, busca por coincidencia parcial en el nombre
+    if (!product) {
+      const regex = new RegExp(userMessage, "i");
+      product = await products.findOne({ name: { $regex: regex } });
+    }
 
     if (product) {
       productInfo = `\n\n🛒 Producto encontrado:\n• Nombre: ${product.name}\n• Precio: $${product.price} COP por ${product.unit}\n• Disponibles: ${product.stock}`;
@@ -41,7 +48,6 @@ app.post("/webhook", async (req, res) => {
 
   const conversationCollection = db.collection("Conversations");
 
-  // Recuperar historial de últimos 19 mensajes anteriores (más el actual = 20)
   const previousMessages = await conversationCollection
     .find({ from })
     .sort({ timestamp: -1 })
@@ -51,7 +57,7 @@ app.post("/webhook", async (req, res) => {
   const messages = [
     {
       role: "system",
-      content: `Eres el asistente virtual de Distribuciones Galaxy. Solo brindas atención comercial sobre productos, precios, pedidos, disponibilidad o postventa.`
+      content: `Eres el asistente virtual de Distribuciones Galaxy, habla amablemente y servicial. Solo brindas atención comercial sobre productos, precios, pedidos, disponibilidad o postventa.`
     },
     ...previousMessages.reverse().map(m => ({ role: m.role, content: m.content })),
     {
@@ -60,7 +66,6 @@ app.post("/webhook", async (req, res) => {
     }
   ];
 
-  // Guardar mensaje del usuario
   await conversationCollection.insertOne({
     from,
     role: "user",
@@ -89,7 +94,6 @@ app.post("/webhook", async (req, res) => {
       reply += productInfo;
     }
 
-    // Guardar respuesta del asistente
     await conversationCollection.insertOne({
       from,
       role: "assistant",
