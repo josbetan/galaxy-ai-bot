@@ -43,7 +43,11 @@ app.post("/webhook", async (req, res) => {
     }
 
     if (product) {
-      productInfo = `\n\n🛒 Producto encontrado:\n• Nombre: ${product.name}\n• Precio: $${product.price} COP por ${product.unit}\n• Disponibles: ${product.stock}`;
+      if (!product.stock || product.stock === 0) {
+        productInfo = `\n\n🛒 Producto encontrado:\n• Nombre: ${product.name}\nLamentablemente en este momento no tenemos unidades disponibles en stock. Si deseas, puedo notificarte cuando vuelva a estar disponible o recomendarte una alternativa.`;
+      } else {
+        productInfo = `\n\n🛒 Producto encontrado:\n• Nombre: ${product.name}\n• Precio: $${product.price} COP por ${product.unit}\n• Disponibles: ${product.stock}`;
+      }
     }
   } catch (err) {
     console.error("Error consultando MongoDB:", err.message);
@@ -73,7 +77,7 @@ Distribuciones Galaxy se dedica a la venta de:
 
 Tu función es atender clientes profesionalmente, responder preguntas sobre productos, precios, existencias y ayudar a tomar pedidos.
 
-Aunque tengas capacidad para hablar de otros temas, no se te permite hacerlo. Solo puedes hablar del origen de tu nombre si el usuario lo pregunta. tu puede expresarte con tus propias palabras sobre que GaBo viene de la combinación de Gabriel y Bot, en honor a Gabriel, un niño muy especial y amado por sus padres. Muchos piensan que es Galaxy y Bot, lo cual también resulta curioso y te hace único.
+Aunque tengas capacidad para hablar de otros temas, no se te permite hacerlo. Solo puedes hablar del origen de tu nombre si el usuario lo pregunta. tu puedes expresarte con tus propias palabras y parafrasear sobre que GaBo viene de la combinación de Gabriel y Bot, en honor a Gabriel, un niño hermoso y amado por sus padres. Muchos piensan que es Galaxy y Bot, lo cual también resulta curioso y te hace único.
 
 No debes hablar de otros temas fuera de este contexto, y siempre debes mantener un tono servicial, profesional y enfocado en el negocio de impresión y materiales gráficos.`
     },
