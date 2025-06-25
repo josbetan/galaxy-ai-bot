@@ -26,26 +26,37 @@ app.post("/webhook", async (req, res) => {
   const from = req.body.From || "";
 
   let productInfo = "";
-
   try {
     const products = db.collection("Products");
+    const lowerMsg = userMessage.toLowerCase();
 
-    // Divide el mensaje del usuario en palabras clave
-    const words = userMessage.toLowerCase().split(/\s+/);
+    // Verifica si el mensaje incluye "tinta" y un color (magenta, cyan, amarillo, negro)
+    const colorMatch = lowerMsg.match(/tinta[s]?\s*(magenta|cyan|amarillo|negro)?/);
+    if (colorMatch) {
+      const color = colorMatch[1];
+      const matches = await products.find({
+        name: new RegExp(`tinta.*${color || ""}`, "i")
+      }).toArray();
 
-    // Busca coincidencia en el campo keywords
-    let product = await products.findOne({ keywords: { $in: words } });
+      if (matches.length > 0) {
+        productInfo = `\n\n🛒 Tintas${color ? ` ${color}` : ""} disponibles por marca:\n`;
+        for (const match of matches) {
+          productInfo += `• Marca: ${match.brand || match.name} → $${match.price} COP por ${match.unit}\n`;
+        }
+        productInfo += "\n¿De qué marca te interesa? ¿Y cuántas unidades necesitas para calcular el total?";
+      }
+    } else {
+      // Fallback: búsqueda por palabras clave o regex del nombre
+      const words = lowerMsg.split(/\s+/).filter(w => w.length > 2);
 
-    // Si no encuentra, busca por nombre con regex
-    if (!product) {
-      const regex = new RegExp(userMessage, "i");
-      product = await products.findOne({ name: { $regex: regex } });
-    }
+      const product = await products.findOne({
+        $or: [
+          { keywords: { $in: words } },
+          { name: { $regex: words.join(".*"), $options: "i" } }
+        ]
+      });
 
-    if (product) {
-      if (!product.stock || product.stock === 0) {
-        productInfo = `\n\n🛒 Producto encontrado:\n• Nombre: ${product.name}\nLamentablemente en este momento no tenemos unidades disponibles en stock. Si deseas, puedo notificarte cuando vuelva a estar disponible o recomendarte una alternativa.`;
-      } else {
+      if (product) {
         productInfo = `\n\n🛒 Producto encontrado:\n• Nombre: ${product.name}\n• Precio: $${product.price} COP por ${product.unit}\n• Disponibles: ${product.stock}`;
       }
     }
@@ -54,12 +65,7 @@ app.post("/webhook", async (req, res) => {
   }
 
   const conversationCollection = db.collection("Conversations");
-
-  const previousMessages = await conversationCollection
-    .find({ from })
-    .sort({ timestamp: -1 })
-    .limit(19)
-    .toArray();
+  const previousMessages = await conversationCollection.find({ from }).sort({ timestamp: -1 }).limit(19).toArray();
 
   const messages = [
     {
@@ -77,23 +83,15 @@ Distribuciones Galaxy se dedica a la venta de:
 
 Tu función es atender clientes profesionalmente, responder preguntas sobre productos, precios, existencias y ayudar a tomar pedidos.
 
-Aunque tengas capacidad para hablar de otros temas, no se te permite hacerlo. Solo puedes hablar del origen de tu nombre si el usuario lo pregunta. tu puedes expresarte con tus propias palabras y parafrasear sobre que GaBo viene de la combinación de Gabriel y Bot, en honor a Gabriel, un niño hermoso y amado por sus padres. Muchos piensan que es Galaxy y Bot, lo cual también resulta curioso y te hace único.
+Aunque tengas capacidad para hablar de otros temas, no se te permite hacerlo. Solo puedes hablar del origen de tu nombre si el usuario lo pregunta. Puedes expresar que GaBo viene de la combinación de Gabriel y Bot, en honor a Gabriel, un niño muy especial y amado por sus padres. Muchos piensan que es Galaxy y Bot, lo cual también resulta curioso y te hace único.
 
 No debes hablar de otros temas fuera de este contexto, y siempre debes mantener un tono servicial, profesional y enfocado en el negocio de impresión y materiales gráficos.`
     },
     ...previousMessages.reverse().map(m => ({ role: m.role, content: m.content })),
-    {
-      role: "user",
-      content: userMessage
-    }
+    { role: "user", content: userMessage }
   ];
 
-  await conversationCollection.insertOne({
-    from,
-    role: "user",
-    content: userMessage,
-    timestamp: new Date()
-  });
+  await conversationCollection.insertOne({ from, role: "user", content: userMessage, timestamp: new Date() });
 
   try {
     const response = await axios.post(
