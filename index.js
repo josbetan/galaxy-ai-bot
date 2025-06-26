@@ -33,9 +33,7 @@ app.post("/webhook", async (req, res) => {
 
   await conversationCollection.insertOne({ from, role: "user", content: userMessage, timestamp: new Date() });
 
-  let context = "";
   let assistantReply = "";
-
   const currentState = conversationStates.get(from) || { step: "initial" };
 
   try {
@@ -52,13 +50,18 @@ app.post("/webhook", async (req, res) => {
         }).toArray();
 
         if (foundProducts.length > 0) {
-          const productList = foundProducts.map(p => `• ${p.name} → $${p.price} COP por ${p.unit}`).join("\n");
-          context = `El cliente preguntó por productos que están disponibles.\n${productList}`;
-          assistantReply = `Sí, contamos con los siguientes productos:\n${productList}\n\n¿Cuántas unidades necesitas de cada uno para calcular el total?`;
-          conversationStates.set(from, { step: "awaiting_quantity", products: foundProducts });
+          const availableProducts = foundProducts.filter(p => p.stock > 0);
+
+          if (availableProducts.length > 0) {
+            const productList = availableProducts.map(p => `• ${p.name} → $${p.price} COP por ${p.unit}`).join("\n");
+            assistantReply = `Sí, contamos con lo que buscas:\n${productList}\n\n¿Cuántas unidades necesitas de cada uno para calcular el total?`;
+            conversationStates.set(from, { step: "awaiting_quantity", products: availableProducts });
+          } else {
+            assistantReply = `Actualmente no tenemos stock de los productos mencionados. Notificaré al equipo de bodega para confirmar.`;
+            await db.collection("Alerts").insertOne({ from, message: userMessage, timestamp: new Date() });
+          }
         } else {
-          assistantReply = `Gracias por tu interés. No encontramos coincidencias en el inventario. Notificaremos al equipo de ventas.`;
-          await db.collection("Alerts").insertOne({ from, message: userMessage, timestamp: new Date() });
+          assistantReply = `Gracias por tu interés. No encontré coincidencias claras. ¿Podrías darme más detalles del producto que necesitas?`;
         }
       } else {
         assistantReply = `¡Hola! Soy GaBo, el asistente virtual de Distribuciones Galaxy. ¿En qué puedo ayudarte hoy?`;
@@ -78,11 +81,12 @@ app.post("/webhook", async (req, res) => {
       conversationStates.set(from, { step: "awaiting_customer_info" });
 
     } else if (currentState.step === "awaiting_customer_info") {
-      if (lowerMsg.includes("nombre") && lowerMsg.includes("dirección")) {
-        assistantReply = `Gracias por compartir tus datos. Puedes realizar el pago por transferencia a nuestra cuenta de Bancolombia. Por favor envía el comprobante aquí para confirmar tu pedido.`;
+      const hasAllInfo = /nombre|c[eé]dula|celular|direcci[oó]n/.test(lowerMsg);
+      if (hasAllInfo) {
+        assistantReply = `Gracias por compartir tus datos. Puedes realizar el pago por transferencia a nuestra cuenta de Bancolombia. Por favor envía el comprobante aquí para confirmar tu pedido. ¡Estaremos atentos!`;
         conversationStates.delete(from);
       } else {
-        assistantReply = `Para confirmar tu pedido, necesito por favor los siguientes datos:\n• Nombre completo\n• Cédula o NIT\n• Celular\n• Dirección de entrega`;
+        assistantReply = `Para confirmar tu pedido, necesito los siguientes datos:\n• Nombre completo\n• Cédula o NIT\n• Celular\n• Dirección de entrega`;
       }
     }
   } catch (err) {
@@ -90,44 +94,19 @@ app.post("/webhook", async (req, res) => {
     assistantReply = "Ocurrió un error interno. Por favor intenta más tarde.";
   }
 
-  const messages = [
-    {
-      role: "system",
-      content: `Eres GaBo, el asistente virtual de Distribuciones Galaxy. Siempre debes presentarte de forma amable y profesional.\n\nDistribuciones Galaxy vende:\n- Tintas ecosolventes marca Galaxy\n- Vinilos de gran formato\n- Vinilos textiles\n- Banners\n- Repuestos e impresoras\n\nSolo debes hablar de estos productos. Tu nombre proviene de Gabriel y Bot. Usa esta información para responder profesionalmente a los clientes.`
-    },
-    ...await conversationCollection.find({ from }).sort({ timestamp: -1 }).limit(10).toArray().then(docs =>
-      docs.reverse().map(doc => ({ role: doc.role, content: doc.content }))
-    ),
-    { role: "user", content: userMessage }
-  ];
-
   try {
-    const response = await axios.post("https://api.openai.com/v1/chat/completions", {
-      model: "gpt-3.5-turbo",
-      messages,
-      temperature: 0.7
-    }, {
-      headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        "Content-Type": "application/json"
-      }
-    });
-
-    const aiResponse = response.data.choices[0].message.content;
-    const finalReply = assistantReply || aiResponse;
-
     await conversationCollection.insertOne({
       from,
       role: "assistant",
-      content: finalReply,
+      content: assistantReply,
       timestamp: new Date()
     });
 
     res.set("Content-Type", "text/plain");
-    return res.send(finalReply);
+    return res.send(assistantReply);
   } catch (err) {
-    console.error("Error con OpenAI:", err.response?.data || err.message);
-    return res.send("Ocurrió un error al contactar al asistente. Intenta más tarde.");
+    console.error("Error guardando respuesta del asistente:", err);
+    return res.send("Ocurrió un error al guardar la conversación.");
   }
 });
 
