@@ -28,48 +28,54 @@ app.post("/webhook", async (req, res) => {
   const from = req.body.From || "";
 
   let productInfo = "";
+  let summary = "";
   try {
     const products = db.collection("Products");
     const lowerMsg = userMessage.toLowerCase();
+    const words = lowerMsg.split(/\s+/).filter(w => w.length > 2);
 
-    // Verifica si el mensaje incluye "tinta" y un color (magenta, cyan, amarillo, negro)
-    const colorMatch = lowerMsg.match(/tinta[s]?\s*(magenta|cyan|amarillo|negro)?/);
-    if (colorMatch) {
-      const color = colorMatch[1];
-      const matches = await products.find({
-        name: new RegExp(`tinta.*${color || ""}`, "i")
-      }).toArray();
+    const foundProducts = await products.find({
+      $or: [
+        { keywords: { $in: words } },
+        { name: { $regex: words.join(".*"), $options: "i" } }
+      ]
+    }).toArray();
 
-      if (matches.length > 0) {
-        productInfo = `\n\n🛒 Tintas${color ? ` ${color}` : ""} disponibles por marca:\n`;
-        for (const match of matches) {
-          productInfo += `• Marca: ${match.brand || match.name} → $${match.price} COP por ${match.unit}\n`;
-        }
-        productInfo += "\n¿De qué marca te interesa? ¿Y cuántas unidades necesitas para calcular el total?";
-        pendingOrders.set(from, { step: "awaiting_brand_quantity", productType: "tinta", color });
-      }
-    } else if (/quiero comprar|comprar[éé]|confirmo pedido|voy a comprar|me interesa/.test(lowerMsg)) {
-      const pending = pendingOrders.get(from);
-      if (pending && pending.step === "awaiting_brand_quantity") {
-        pendingOrders.set(from, { ...pending, step: "awaiting_customer_info" });
-        productInfo = "\n\nPerfecto. Para procesar tu pedido necesito los siguientes datos:\n• Nombre completo\n• Dirección de entrega\n• Teléfono de contacto (si es diferente al de este chat)";
-      } else if (pending && pending.step === "awaiting_customer_info" && lowerMsg.includes("nombre") && lowerMsg.includes("dirección")) {
-        pendingOrders.set(from, { ...pending, step: "awaiting_payment" });
-        productInfo = "\n\nGracias por compartir tus datos. Ahora puedes realizar el pago por transferencia a nuestra cuenta de Bancolombia. Por favor envía el comprobante aquí para confirmar tu pedido.";
-      }
-    } else {
-      const words = lowerMsg.split(/\s+/).filter(w => w.length > 2);
-      const product = await products.findOne({
-        $or: [
-          { keywords: { $in: words } },
-          { name: { $regex: words.join(".*"), $options: "i" } }
-        ]
+    if (foundProducts.length > 0) {
+      productInfo += `\n\n✅ Productos disponibles:`;
+      foundProducts.forEach(prod => {
+        productInfo += `\n• ${prod.name} → $${prod.price} COP por ${prod.unit}`;
       });
-
-      if (product) {
-        productInfo = `\n\n🛒 Producto encontrado:\n• Nombre: ${product.name}\n• Precio: $${product.price} COP por ${product.unit}\n• Disponibles: ${product.stock}`;
-      }
+      productInfo += "\n\n¿Cuántas unidades o metros deseas de cada uno? Puedo ayudarte a calcular el total.";
+      pendingOrders.set(from, { step: "awaiting_quantity", products: foundProducts });
+    } else {
+      productInfo = "\n\nLo siento, no encontramos los productos que mencionaste en nuestro inventario. Voy a notificar a nuestro equipo de ventas para que lo verifiquen manualmente.";
+      await db.collection("Alerts").insertOne({ from, message: userMessage, timestamp: new Date() });
     }
+
+    const pending = pendingOrders.get(from);
+    if (pending && pending.step === "awaiting_quantity" && /\d+/.test(lowerMsg)) {
+      const quantities = lowerMsg.match(/\d+/g).map(Number);
+      let total = 0;
+      pending.products.forEach((p, i) => {
+        const qty = quantities[i] || 1;
+        total += qty * p.price;
+        summary += `\n• ${p.name}: ${qty} x $${p.price} = $${qty * p.price}`;
+      });
+      productInfo = `\n\n🧾 Resumen del pedido:${summary}\n\nTotal estimado: $${total} COP.`;
+      productInfo += "\n\n¿Deseas confirmar este pedido? Si es así, por favor indícame:
+• Nombre completo
+• Cédula o NIT
+• Celular
+• Dirección de entrega";
+      pendingOrders.set(from, { step: "awaiting_customer_info", products: pending.products, total });
+    }
+
+    if (pending && pending.step === "awaiting_customer_info" && lowerMsg.includes("nombre") && lowerMsg.includes("dirección")) {
+      productInfo = "\n\nGracias por compartir tus datos. Puedes realizar el pago por transferencia a nuestra cuenta de Bancolombia. Por favor envía el comprobante aquí para confirmar tu pedido.";
+      pendingOrders.delete(from);
+    }
+
   } catch (err) {
     console.error("Error consultando MongoDB:", err.message);
   }
