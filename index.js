@@ -29,28 +29,34 @@ app.post("/webhook", async (req, res) => {
 
   let productInfo = "";
   let summary = "";
+
   try {
     const products = db.collection("Products");
     const lowerMsg = userMessage.toLowerCase();
     const words = lowerMsg.split(/\s+/).filter(w => w.length > 2);
 
-    const foundProducts = await products.find({
-      $or: [
-        { keywords: { $in: words } },
-        { name: { $regex: words.join(".*"), $options: "i" } }
-      ]
-    }).toArray();
+    if (words.length > 0) {
+      const foundProducts = await products.find({
+        $or: [
+          { keywords: { $in: words } },
+          { name: { $regex: words.join(".*"), $options: "i" } }
+        ]
+      }).toArray();
 
-    if (foundProducts.length > 0) {
-      productInfo += `\n\n✅ Productos disponibles:`;
-      foundProducts.forEach(prod => {
-        productInfo += `\n• ${prod.name} → $${prod.price} COP por ${prod.unit}`;
-      });
-      productInfo += `\n\n¿Cuántas unidades o metros deseas de cada uno? Puedo ayudarte a calcular el total.`;
-      pendingOrders.set(from, { step: "awaiting_quantity", products: foundProducts });
-    } else {
-      productInfo = "\n\nLo siento, no encontramos los productos que mencionaste en nuestro inventario. Voy a notificar a nuestro equipo de ventas para que lo verifiquen manualmente.";
-      await db.collection("Alerts").insertOne({ from, message: userMessage, timestamp: new Date() });
+      if (foundProducts.length > 0) {
+        productInfo += `\n\n✅ Productos disponibles:`;
+        foundProducts.forEach(prod => {
+          productInfo += `\n• ${prod.name} → $${prod.price} COP por ${prod.unit}`;
+        });
+        productInfo += "\n\n¿Cuántas unidades o metros deseas de cada uno? Puedo ayudarte a calcular el total.";
+        pendingOrders.set(from, { step: "awaiting_quantity", products: foundProducts });
+      } else {
+        productInfo = ""; // Evitar respuesta innecesaria si no hay productos encontrados
+        if (words.some(w => w.length > 3)) {
+          productInfo = "\n\nLo siento, no encontramos los productos que mencionaste en nuestro inventario. Voy a notificar a nuestro equipo de ventas para que lo verifiquen manualmente.";
+          await db.collection("Alerts").insertOne({ from, message: userMessage, timestamp: new Date() });
+        }
+      }
     }
 
     const pending = pendingOrders.get(from);
@@ -63,11 +69,7 @@ app.post("/webhook", async (req, res) => {
         summary += `\n• ${p.name}: ${qty} x $${p.price} = $${qty * p.price}`;
       });
       productInfo = `\n\n🧾 Resumen del pedido:${summary}\n\nTotal estimado: $${total} COP.`;
-      productInfo += `\n\n¿Deseas confirmar este pedido? Si es así, por favor indícame:
-• Nombre completo
-• Cédula o NIT
-• Celular
-• Dirección de entrega`;
+      productInfo += "\n\n¿Deseas confirmar este pedido? Si es así, por favor indícame:\n• Nombre completo\n• Cédula o NIT\n• Celular\n• Dirección de entrega";
       pendingOrders.set(from, { step: "awaiting_customer_info", products: pending.products, total });
     }
 
