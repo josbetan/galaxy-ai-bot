@@ -40,22 +40,28 @@ app.post("/webhook", async (req, res) => {
 
   try {
     if (currentState.step === "initial") {
-      const words = lowerMsg.split(/\s+/);
-      const foundProducts = await productsCollection.find({
-        $or: [
-          { keywords: { $in: words } },
-          { name: { $regex: words.join(".*"), $options: "i" } }
-        ]
-      }).toArray();
+      const isProductQuery = /(precio|tinta|vinilo|vale|cu[aá]nto|tienes|hay|cost[oó])/i.test(lowerMsg);
 
-      if (foundProducts.length > 0) {
-        const productList = foundProducts.map(p => `• ${p.name} → $${p.price} COP por ${p.unit}`).join("\n");
-        context = `El cliente preguntó por productos que están disponibles.\n${productList}`;
-        assistantReply = `Sí, contamos con los siguientes productos:\n${productList}\n\n¿Cuántas unidades necesitas de cada uno para calcular el total?`;
-        conversationStates.set(from, { step: "awaiting_quantity", products: foundProducts });
+      if (isProductQuery) {
+        const words = lowerMsg.split(/\s+/);
+        const foundProducts = await productsCollection.find({
+          $or: [
+            { keywords: { $in: words } },
+            { name: { $regex: words.join(".*"), $options: "i" } }
+          ]
+        }).toArray();
+
+        if (foundProducts.length > 0) {
+          const productList = foundProducts.map(p => `• ${p.name} → $${p.price} COP por ${p.unit}`).join("\n");
+          context = `El cliente preguntó por productos que están disponibles.\n${productList}`;
+          assistantReply = `Sí, contamos con los siguientes productos:\n${productList}\n\n¿Cuántas unidades necesitas de cada uno para calcular el total?`;
+          conversationStates.set(from, { step: "awaiting_quantity", products: foundProducts });
+        } else {
+          assistantReply = `Gracias por tu interés. No encontramos coincidencias en el inventario. Notificaremos al equipo de ventas.`;
+          await db.collection("Alerts").insertOne({ from, message: userMessage, timestamp: new Date() });
+        }
       } else {
-        assistantReply = `Gracias por tu interés. No encontramos coincidencias en el inventario. Notificaremos al equipo de ventas.`;
-        await db.collection("Alerts").insertOne({ from, message: userMessage, timestamp: new Date() });
+        assistantReply = `¡Hola! Soy GaBo, el asistente virtual de Distribuciones Galaxy. ¿En qué puedo ayudarte hoy?`;
       }
 
     } else if (currentState.step === "awaiting_quantity") {
