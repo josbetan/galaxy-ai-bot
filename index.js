@@ -46,7 +46,7 @@ app.post("/webhook", async (req, res) => {
       foundProducts.forEach(prod => {
         productInfo += `\n• ${prod.name} → $${prod.price} COP por ${prod.unit}`;
       });
-      productInfo += "\n\n¿Cuántas unidades o metros deseas de cada uno? Puedo ayudarte a calcular el total.";
+      productInfo += `\n\n¿Cuántas unidades o metros deseas de cada uno? Puedo ayudarte a calcular el total.`;
       pendingOrders.set(from, { step: "awaiting_quantity", products: foundProducts });
     } else {
       productInfo = "\n\nLo siento, no encontramos los productos que mencionaste en nuestro inventario. Voy a notificar a nuestro equipo de ventas para que lo verifiquen manualmente.";
@@ -63,11 +63,11 @@ app.post("/webhook", async (req, res) => {
         summary += `\n• ${p.name}: ${qty} x $${p.price} = $${qty * p.price}`;
       });
       productInfo = `\n\n🧾 Resumen del pedido:${summary}\n\nTotal estimado: $${total} COP.`;
-      productInfo += "\n\n¿Deseas confirmar este pedido? Si es así, por favor indícame:
+      productInfo += `\n\n¿Deseas confirmar este pedido? Si es así, por favor indícame:
 • Nombre completo
 • Cédula o NIT
 • Celular
-• Dirección de entrega";
+• Dirección de entrega`;
       pendingOrders.set(from, { step: "awaiting_customer_info", products: pending.products, total });
     }
 
