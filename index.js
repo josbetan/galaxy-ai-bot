@@ -21,6 +21,8 @@ async function connectToDB() {
 }
 connectToDB();
 
+const pendingOrders = new Map();
+
 app.post("/webhook", async (req, res) => {
   const userMessage = req.body.Body || "";
   const from = req.body.From || "";
@@ -44,11 +46,19 @@ app.post("/webhook", async (req, res) => {
           productInfo += `• Marca: ${match.brand || match.name} → $${match.price} COP por ${match.unit}\n`;
         }
         productInfo += "\n¿De qué marca te interesa? ¿Y cuántas unidades necesitas para calcular el total?";
+        pendingOrders.set(from, { step: "awaiting_brand_quantity", productType: "tinta", color });
+      }
+    } else if (/quiero comprar|comprar[éé]|confirmo pedido|voy a comprar|me interesa/.test(lowerMsg)) {
+      const pending = pendingOrders.get(from);
+      if (pending && pending.step === "awaiting_brand_quantity") {
+        pendingOrders.set(from, { ...pending, step: "awaiting_customer_info" });
+        productInfo = "\n\nPerfecto. Para procesar tu pedido necesito los siguientes datos:\n• Nombre completo\n• Dirección de entrega\n• Teléfono de contacto (si es diferente al de este chat)";
+      } else if (pending && pending.step === "awaiting_customer_info" && lowerMsg.includes("nombre") && lowerMsg.includes("dirección")) {
+        pendingOrders.set(from, { ...pending, step: "awaiting_payment" });
+        productInfo = "\n\nGracias por compartir tus datos. Ahora puedes realizar el pago por transferencia a nuestra cuenta de Bancolombia. Por favor envía el comprobante aquí para confirmar tu pedido.";
       }
     } else {
-      // Fallback: búsqueda por palabras clave o regex del nombre
       const words = lowerMsg.split(/\s+/).filter(w => w.length > 2);
-
       const product = await products.findOne({
         $or: [
           { keywords: { $in: words } },
@@ -83,7 +93,7 @@ Distribuciones Galaxy se dedica a la venta de:
 
 Tu función es atender clientes profesionalmente, responder preguntas sobre productos, precios, existencias y ayudar a tomar pedidos.
 
-Aunque tengas capacidad para hablar de otros temas, no se te permite hacerlo. Solo puedes hablar del origen de tu nombre si el usuario lo pregunta. Puedes parafrasear que GaBo viene de la combinación de Gabriel y Bot, en honor a Gabriel un hermoso niño amado por sus padres, Muchos piensan que es Ga viene de Galaxy y Bot, lo cual también resulta curioso ya que dicha sílaba coincide con Ga.
+Aunque tengas capacidad para hablar de otros temas, no se te permite hacerlo. Solo puedes hablar del origen de tu nombre si el usuario lo pregunta. Puedes parafrasear que GaBo viene de la combinación de Gabriel y Bot, en honor a Gabriel un hermoso niño que amamos mucho, Muchos piensan que es Ga viene de Galaxy y Bot, lo cual también resulta curioso ya que dicha sílaba coincide con Ga.
 
 No debes hablar de otros temas fuera de este contexto, y siempre debes mantener un tono servicial, profesional y enfocado en el negocio de impresión y materiales gráficos.`
     },
@@ -133,4 +143,3 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Servidor corriendo en puerto", PORT);
 });
-
