@@ -43,7 +43,7 @@ app.post("/webhook", async (req, res) => {
 
   const conversationCollection = db.collection("Conversations");
 
-  // Recupera los últimos 19 mensajes anteriores
+  // Historial de mensajes anteriores
   const previousMessages = await conversationCollection
     .find({ from })
     .sort({ timestamp: -1 })
@@ -55,7 +55,7 @@ app.post("/webhook", async (req, res) => {
 
   const fuse = new Fuse(products, {
     keys: ['name', 'keywords'],
-    threshold: 0.4,
+    threshold: 0.45,  // más tolerante a errores como "galazy"
     includeScore: true,
     ignoreLocation: true,
     useExtendedSearch: true
@@ -71,8 +71,9 @@ app.post("/webhook", async (req, res) => {
     if (topResults.length === 1) {
       bestMatch = topResults[0].item;
     } else {
-      bestMatch = topResults.find(r => userMessage.toLowerCase().includes(r.item.name.toLowerCase()))?.item
-                || topResults[0].item;
+      bestMatch = topResults.find(r =>
+        userMessage.toLowerCase().includes(r.item.name.toLowerCase())
+      )?.item || topResults[0].item;
     }
   }
 
@@ -80,9 +81,9 @@ app.post("/webhook", async (req, res) => {
 
   let pedidoContext = "";
   if (bestMatch && cantidadDetectada) {
-    pedidoContext = `El cliente indicó que desea ${cantidadDetectada.cantidad} ${cantidadDetectada.unidad || bestMatch.unit} del producto "${bestMatch.name}", cuyo precio es ${bestMatch.price} COP por ${bestMatch.unit}. No necesitas preguntar por modelo de impresora ni otros detalles adicionales, ya que el precio no varía por eso.`;
+    pedidoContext = `El cliente indicó que desea ${cantidadDetectada.cantidad} ${cantidadDetectada.unidad || bestMatch.unit} del producto "${bestMatch.name}", cuyo precio es ${bestMatch.price} COP por ${bestMatch.unit}. No necesitas preguntar por modelo de impresora, tipo de tinta ni otros detalles adicionales. Usa esta información para responder de forma clara, natural y enfocada.`;
   } else if (bestMatch) {
-    pedidoContext = `El cliente podría estar interesado en el producto "${bestMatch.name}", cuyo precio es ${bestMatch.price} COP por ${bestMatch.unit}. No necesitas preguntar por modelo de impresora ni otros detalles adicionales.`;
+    pedidoContext = `El cliente podría estar interesado en el producto "${bestMatch.name}", cuyo precio es ${bestMatch.price} COP por ${bestMatch.unit}. No necesitas preguntar por modelo de impresora, tipo de tinta ni otros detalles adicionales. Usa esta información para responder de forma clara y profesional.`;
   }
 
   const messages = [
