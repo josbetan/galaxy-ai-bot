@@ -21,92 +21,73 @@ async function connectToDB() {
 }
 connectToDB();
 
-const conversationStates = new Map();
-
 app.post("/webhook", async (req, res) => {
   const userMessage = req.body.Body || "";
   const from = req.body.From || "";
-  const lowerMsg = userMessage.toLowerCase();
 
-  const productsCollection = db.collection("Products");
   const conversationCollection = db.collection("Conversations");
+
+  const previousMessages = await conversationCollection
+    .find({ from })
+    .sort({ timestamp: -1 })
+    .limit(19)
+    .toArray();
+
+  const messages = [
+    {
+      role: "system",
+      content: `Eres GaBo, el asistente virtual de Distribuciones Galaxy. Siempre debes iniciar saludando de forma amable, diciendo tu nombre y que eres el asistente virtual de Distribuciones Galaxy.
+
+Distribuciones Galaxy se dedica a la venta de:
+- Tintas ecosolventes marca Galaxy
+- Vinilos para impresoras de gran formato
+- Vinilos textiles
+- Banners
+- Repuestos
+- Impresoras de gran formato
+- Otros productos relacionados con impresión y materiales gráficos
+
+Tu función es atender clientes profesionalmente, responder preguntas sobre productos, precios, existencias y ayudar a tomar pedidos.
+
+Aunque tengas capacidad para hablar de otros temas, no se te permite hacerlo. Solo puedes hablar del origen de tu nombre si el usuario lo pregunta. Puedes parafrasear que GaBo viene de la combinación de Gabriel y Bot, en honor a Gabriel un hermoso niño amado por sus padres. Muchos piensan que "Ga" viene de Galaxy y Bot, lo cual también resulta curioso ya que dicha sílaba coincide con "Ga".
+
+No debes hablar de otros temas fuera de este contexto, y siempre debes mantener un tono servicial, profesional y enfocado en el negocio de impresión y materiales gráficos.`
+    },
+    ...previousMessages.reverse().map(m => ({ role: m.role, content: m.content })),
+    { role: "user", content: userMessage }
+  ];
 
   await conversationCollection.insertOne({ from, role: "user", content: userMessage, timestamp: new Date() });
 
-  let assistantReply = "";
-  const currentState = conversationStates.get(from) || { step: "initial" };
-
   try {
-    if (currentState.step === "initial") {
-      const isProductQuery = /(precio|tinta|vinilo|vale|cu[aá]nto|tienes|hay|cost[oó])/i.test(lowerMsg);
-
-      if (isProductQuery) {
-        const words = lowerMsg.split(/\s+/);
-        const foundProducts = await productsCollection.find({
-          $or: [
-            { keywords: { $in: words } },
-            { name: { $regex: words.join(".*"), $options: "i" } }
-          ]
-        }).toArray();
-
-        if (foundProducts.length > 0) {
-          const availableProducts = foundProducts.filter(p => p.stock > 0);
-
-          if (availableProducts.length > 0) {
-            const productList = availableProducts.map(p => `• ${p.name} → $${p.price} COP por ${p.unit}`).join("\n");
-            assistantReply = `Sí, contamos con lo que buscas:\n${productList}\n\n¿Cuántas unidades necesitas de cada uno para calcular el total?`;
-            conversationStates.set(from, { step: "awaiting_quantity", products: availableProducts });
-          } else {
-            assistantReply = `Actualmente no tenemos stock de los productos mencionados. Notificaré al equipo de bodega para confirmar.`;
-            await db.collection("Alerts").insertOne({ from, message: userMessage, timestamp: new Date() });
-          }
-        } else {
-          assistantReply = `Gracias por tu interés. No encontré coincidencias claras. ¿Podrías darme más detalles del producto que necesitas?`;
+    const response = await axios.post(
+      "https://api.openai.com/v1/chat/completions",
+      {
+        model: "gpt-3.5-turbo",
+        messages: messages
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+          "Content-Type": "application/json"
         }
-      } else {
-        assistantReply = `¡Hola! Soy GaBo, el asistente virtual de Distribuciones Galaxy. ¿En qué puedo ayudarte hoy?`;
       }
+    );
 
-    } else if (currentState.step === "awaiting_quantity") {
-      const quantities = lowerMsg.match(/\d+/g)?.map(Number) || [];
-      let total = 0;
-      let summary = "";
-      currentState.products.forEach((p, i) => {
-        const qty = quantities[i] || 1;
-        const lineTotal = qty * p.price;
-        total += lineTotal;
-        summary += `\n• ${p.name}: ${qty} x $${p.price} = $${lineTotal}`;
-      });
-      assistantReply = `🧾 Resumen del pedido:${summary}\n\nTotal estimado: $${total} COP.\n\n¿Deseas confirmar este pedido? Por favor, indícame:\n• Nombre completo\n• Cédula o NIT\n• Celular\n• Dirección de entrega`;
-      conversationStates.set(from, { step: "awaiting_customer_info" });
+    const reply = response.data.choices[0].message.content;
 
-    } else if (currentState.step === "awaiting_customer_info") {
-      const hasAllInfo = /nombre|c[eé]dula|celular|direcci[oó]n/.test(lowerMsg);
-      if (hasAllInfo) {
-        assistantReply = `Gracias por compartir tus datos. Puedes realizar el pago por transferencia a nuestra cuenta de Bancolombia. Por favor envía el comprobante aquí para confirmar tu pedido. ¡Estaremos atentos!`;
-        conversationStates.delete(from);
-      } else {
-        assistantReply = `Para confirmar tu pedido, necesito los siguientes datos:\n• Nombre completo\n• Cédula o NIT\n• Celular\n• Dirección de entrega`;
-      }
-    }
-  } catch (err) {
-    console.error("Error consultando MongoDB:", err.message);
-    assistantReply = "Ocurrió un error interno. Por favor intenta más tarde.";
-  }
-
-  try {
     await conversationCollection.insertOne({
       from,
       role: "assistant",
-      content: assistantReply,
+      content: reply,
       timestamp: new Date()
     });
 
     res.set("Content-Type", "text/plain");
-    return res.send(assistantReply);
+    return res.send(reply);
   } catch (err) {
-    console.error("Error guardando respuesta del asistente:", err);
-    return res.send("Ocurrió un error al guardar la conversación.");
+    console.error("Error con OpenAI:", err.response?.data || err.message);
+    return res.send("Ocurrió un error. Por favor intenta más tarde.");
   }
 });
 
