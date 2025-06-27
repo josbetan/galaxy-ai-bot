@@ -55,24 +55,36 @@ app.post("/webhook", async (req, res) => {
 
   const fuse = new Fuse(products, {
     keys: ['name', 'keywords'],
-    threshold: 0.4
+    threshold: 0.4,
+    includeScore: true,
+    ignoreLocation: true,
+    useExtendedSearch: true
   });
 
   const fuzzyResults = fuse.search(userMessage);
-  let bestMatch = fuzzyResults.length > 0 ? fuzzyResults[0].item : null;
+  let bestMatch = null;
 
-  // Detecta cantidad y unidad
-  const cantidadDetectada = detectarCantidadUnidad(userMessage);
+  if (fuzzyResults.length > 0) {
+    const topScore = fuzzyResults[0].score;
+    const topResults = fuzzyResults.filter(r => r.score <= topScore + 0.01);
 
-  // Genera contexto para el modelo
-  let pedidoContext = "";
-  if (bestMatch && cantidadDetectada) {
-    pedidoContext = `El cliente indicó que desea ${cantidadDetectada.cantidad} ${cantidadDetectada.unidad || bestMatch.unit} del producto "${bestMatch.name}", cuyo precio es ${bestMatch.price} COP por ${bestMatch.unit}.`;
-  } else if (bestMatch) {
-    pedidoContext = `El cliente podría estar interesado en el producto "${bestMatch.name}", cuyo precio es ${bestMatch.price} COP por ${bestMatch.unit}.`;
+    if (topResults.length === 1) {
+      bestMatch = topResults[0].item;
+    } else {
+      bestMatch = topResults.find(r => userMessage.toLowerCase().includes(r.item.name.toLowerCase()))?.item
+                || topResults[0].item;
+    }
   }
 
-  // Prepara los mensajes para OpenAI
+  const cantidadDetectada = detectarCantidadUnidad(userMessage);
+
+  let pedidoContext = "";
+  if (bestMatch && cantidadDetectada) {
+    pedidoContext = `El cliente indicó que desea ${cantidadDetectada.cantidad} ${cantidadDetectada.unidad || bestMatch.unit} del producto "${bestMatch.name}", cuyo precio es ${bestMatch.price} COP por ${bestMatch.unit}. No necesitas preguntar por modelo de impresora ni otros detalles adicionales, ya que el precio no varía por eso.`;
+  } else if (bestMatch) {
+    pedidoContext = `El cliente podría estar interesado en el producto "${bestMatch.name}", cuyo precio es ${bestMatch.price} COP por ${bestMatch.unit}. No necesitas preguntar por modelo de impresora ni otros detalles adicionales.`;
+  }
+
   const messages = [
     {
       role: "system",
@@ -98,7 +110,6 @@ No debes hablar de otros temas fuera de este contexto, y siempre debes mantener 
     { role: "user", content: userMessage }
   ];
 
-  // Guarda el mensaje del usuario
   await conversationCollection.insertOne({
     from,
     role: "user",
@@ -123,7 +134,6 @@ No debes hablar de otros temas fuera de este contexto, y siempre debes mantener 
 
     const reply = response.data.choices[0].message.content;
 
-    // Guarda la respuesta del asistente
     await conversationCollection.insertOne({
       from,
       role: "assistant",
