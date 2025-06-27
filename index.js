@@ -1,4 +1,5 @@
 const express = require("express");
+const Fuse = require("fuse.js");
 const axios = require("axios");
 const { MongoClient } = require("mongodb");
 require("dotenv").config();
@@ -21,18 +22,57 @@ async function connectToDB() {
 }
 connectToDB();
 
+// Función para detectar cantidad y unidad en el mensaje
+function detectarCantidadUnidad(mensaje) {
+  const regex = /(\d+)\s?(unidades?|metros?|mts?|m|u)?/i;
+  const match = mensaje.match(regex);
+
+  if (match) {
+    return {
+      cantidad: parseInt(match[1]),
+      unidad: match[2] || null
+    };
+  }
+
+  return null;
+}
+
 app.post("/webhook", async (req, res) => {
   const userMessage = req.body.Body || "";
   const from = req.body.From || "";
 
   const conversationCollection = db.collection("Conversations");
 
+  // Recupera los últimos 19 mensajes anteriores
   const previousMessages = await conversationCollection
     .find({ from })
     .sort({ timestamp: -1 })
     .limit(19)
     .toArray();
 
+  // Búsqueda de producto
+  const products = await db.collection("Products").find({}).toArray();
+
+  const fuse = new Fuse(products, {
+    keys: ['name', 'keywords'],
+    threshold: 0.4
+  });
+
+  const fuzzyResults = fuse.search(userMessage);
+  let bestMatch = fuzzyResults.length > 0 ? fuzzyResults[0].item : null;
+
+  // Detecta cantidad y unidad
+  const cantidadDetectada = detectarCantidadUnidad(userMessage);
+
+  // Genera contexto para el modelo
+  let pedidoContext = "";
+  if (bestMatch && cantidadDetectada) {
+    pedidoContext = `El cliente indicó que desea ${cantidadDetectada.cantidad} ${cantidadDetectada.unidad || bestMatch.unit} del producto "${bestMatch.name}", cuyo precio es ${bestMatch.price} COP por ${bestMatch.unit}.`;
+  } else if (bestMatch) {
+    pedidoContext = `El cliente podría estar interesado en el producto "${bestMatch.name}", cuyo precio es ${bestMatch.price} COP por ${bestMatch.unit}.`;
+  }
+
+  // Prepara los mensajes para OpenAI
   const messages = [
     {
       role: "system",
@@ -53,18 +93,25 @@ Aunque tengas capacidad para hablar de otros temas, no se te permite hacerlo. So
 
 No debes hablar de otros temas fuera de este contexto, y siempre debes mantener un tono servicial, profesional y enfocado en el negocio de impresión y materiales gráficos.`
     },
+    ...(pedidoContext ? [{ role: "system", content: pedidoContext }] : []),
     ...previousMessages.reverse().map(m => ({ role: m.role, content: m.content })),
     { role: "user", content: userMessage }
   ];
 
-  await conversationCollection.insertOne({ from, role: "user", content: userMessage, timestamp: new Date() });
+  // Guarda el mensaje del usuario
+  await conversationCollection.insertOne({
+    from,
+    role: "user",
+    content: userMessage,
+    timestamp: new Date()
+  });
 
   try {
     const response = await axios.post(
       "https://api.openai.com/v1/chat/completions",
       {
         model: "gpt-3.5-turbo",
-        messages: messages
+        messages
       },
       {
         headers: {
@@ -76,6 +123,7 @@ No debes hablar de otros temas fuera de este contexto, y siempre debes mantener 
 
     const reply = response.data.choices[0].message.content;
 
+    // Guarda la respuesta del asistente
     await conversationCollection.insertOne({
       from,
       role: "assistant",
