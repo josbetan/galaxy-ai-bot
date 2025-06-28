@@ -22,7 +22,6 @@ async function connectToDB() {
 }
 connectToDB();
 
-// Función para detectar cantidad y unidad en el mensaje
 function detectarCantidadUnidad(mensaje) {
   const regex = /(\d+)\s?(unidades?|metros?|mts?|m|u)?/i;
   const match = mensaje.match(regex);
@@ -37,53 +36,61 @@ function detectarCantidadUnidad(mensaje) {
   return null;
 }
 
+function normalizarTexto(texto) {
+  return texto.toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .split(/\s+/)
+    .sort()
+    .join(" ");
+}
+
 app.post("/webhook", async (req, res) => {
   const userMessage = req.body.Body || "";
   const from = req.body.From || "";
 
   const conversationCollection = db.collection("Conversations");
 
-  // Historial de mensajes anteriores
   const previousMessages = await conversationCollection
     .find({ from })
     .sort({ timestamp: -1 })
     .limit(19)
     .toArray();
 
-  // Búsqueda de producto
   const products = await db.collection("Products").find({}).toArray();
+  const mensajeLimpio = normalizarTexto(userMessage);
 
   const fuse = new Fuse(products, {
-    keys: ['name', 'keywords'],
-    threshold: 0.45,  // más tolerante a errores como "galazy"
+    keys: ['searchIndex'],
+    threshold: 0.3,
     includeScore: true,
-    ignoreLocation: true,
-    useExtendedSearch: true
+    ignoreLocation: true
   });
 
-  const fuzzyResults = fuse.search(userMessage);
-  let bestMatch = null;
-
-  if (fuzzyResults.length > 0) {
-    const topScore = fuzzyResults[0].score;
-    const topResults = fuzzyResults.filter(r => r.score <= topScore + 0.01);
-
-    if (topResults.length === 1) {
-      bestMatch = topResults[0].item;
-    } else {
-      bestMatch = topResults.find(r =>
-        userMessage.toLowerCase().includes(r.item.name.toLowerCase())
-      )?.item || topResults[0].item;
-    }
-  }
+  const fuzzyResults = fuse.search(mensajeLimpio);
 
   const cantidadDetectada = detectarCantidadUnidad(userMessage);
-
   let pedidoContext = "";
-  if (bestMatch && cantidadDetectada) {
-    pedidoContext = `El cliente indicó que desea ${cantidadDetectada.cantidad} ${cantidadDetectada.unidad || bestMatch.unit} del producto "${bestMatch.name}", cuyo precio es ${bestMatch.price} COP por ${bestMatch.unit}. No necesitas preguntar por modelo de impresora, tipo de tinta ni otros detalles adicionales. Usa esta información para responder de forma clara, natural y enfocada.`;
-  } else if (bestMatch) {
-    pedidoContext = `El cliente podría estar interesado en el producto "${bestMatch.name}", cuyo precio es ${bestMatch.price} COP por ${bestMatch.unit}. No necesitas preguntar por modelo de impresora, tipo de tinta ni otros detalles adicionales. Usa esta información para responder de forma clara y profesional.`;
+
+  if (fuzzyResults.length === 1) {
+    const bestMatch = fuzzyResults[0].item;
+    if (cantidadDetectada) {
+      pedidoContext = `El cliente indicó que desea ${cantidadDetectada.cantidad} ${cantidadDetectada.unidad || bestMatch.unit} del producto "${bestMatch.name}", cuyo precio es ${bestMatch.price} COP por ${bestMatch.unit}. No necesitas preguntar por modelo de impresora, tipo de tinta ni otros detalles adicionales. Usa esta información para responder de forma clara, natural y enfocada.`;
+    } else {
+      pedidoContext = `El cliente podría estar interesado en el producto "${bestMatch.name}", cuyo precio es ${bestMatch.price} COP por ${bestMatch.unit}. No necesitas preguntar por modelo de impresora, tipo de tinta ni otros detalles adicionales. Usa esta información para responder de forma clara y profesional.`;
+    }
+  } else if (fuzzyResults.length > 1) {
+    const nombres = new Set();
+    const resumen = fuzzyResults.slice(0, 5).map(r => {
+      const p = r.item;
+      const clave = normalizarTexto(p.name).replace(/\s+/g, "");
+      if (nombres.has(clave)) return null;
+      nombres.add(clave);
+      return `- ${p.name}: ${p.price} COP por ${p.unit}`;
+    }).filter(Boolean).join("\n");
+
+    if (resumen) {
+      pedidoContext = `El cliente mencionó algo relacionado con productos similares. Aquí hay varias coincidencias posibles:\n${resumen}\nPresenta estas opciones de forma clara y pregunta cuál desea. No preguntes por modelo de impresora u otros detalles adicionales.`;
+    }
   }
 
   const messages = [
