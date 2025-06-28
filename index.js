@@ -23,17 +23,13 @@ async function connectToDB() {
 connectToDB();
 
 function detectarCantidadUnidad(mensaje) {
-  const regex = /(\d+)\s?(unidades?|metros?|mts?|m|u)?/i;
-  const match = mensaje.match(regex);
-
-  if (match) {
-    return {
-      cantidad: parseInt(match[1]),
-      unidad: match[2] || null
-    };
+  const regex = /(?:(\d+)\s?(unidades?|metros?|mts?|m|u)?)/gi;
+  let match;
+  const cantidades = [];
+  while ((match = regex.exec(mensaje)) !== null) {
+    cantidades.push({ cantidad: parseInt(match[1]), unidad: match[2] || null });
   }
-
-  return null;
+  return cantidades;
 }
 
 function normalizarTexto(texto) {
@@ -49,7 +45,6 @@ app.post("/webhook", async (req, res) => {
   const from = req.body.From || "";
 
   const conversationCollection = db.collection("Conversations");
-
   const previousMessages = await conversationCollection
     .find({ from })
     .sort({ timestamp: -1 })
@@ -67,30 +62,39 @@ app.post("/webhook", async (req, res) => {
   });
 
   const fuzzyResults = fuse.search(mensajeLimpio);
+  const cantidades = detectarCantidadUnidad(userMessage);
 
-  const cantidadDetectada = detectarCantidadUnidad(userMessage);
   let pedidoContext = "";
 
   if (fuzzyResults.length === 1) {
     const bestMatch = fuzzyResults[0].item;
-    if (cantidadDetectada) {
-      pedidoContext = `El cliente indicó que desea ${cantidadDetectada.cantidad} ${cantidadDetectada.unidad || bestMatch.unit} del producto "${bestMatch.name}", cuyo precio es ${bestMatch.price} COP por ${bestMatch.unit}. No necesitas preguntar por modelo de impresora, tipo de tinta ni otros detalles adicionales. Usa esta información para responder de forma clara, natural y enfocada.`;
+    const cantidad = cantidades[0];
+    if (cantidad) {
+      pedidoContext = `El cliente indicó que desea ${cantidad.cantidad} ${cantidad.unidad || bestMatch.unit} del producto "${bestMatch.name}" (${bestMatch.brand}), cuyo precio es ${bestMatch.price} COP por ${bestMatch.unit}.`;
     } else {
-      pedidoContext = `El cliente podría estar interesado en el producto "${bestMatch.name}", cuyo precio es ${bestMatch.price} COP por ${bestMatch.unit}. No necesitas preguntar por modelo de impresora, tipo de tinta ni otros detalles adicionales. Usa esta información para responder de forma clara y profesional.`;
+      pedidoContext = `El cliente podría estar interesado en el producto "${bestMatch.name}" (${bestMatch.brand}), cuyo precio es ${bestMatch.price} COP por ${bestMatch.unit}.`;
     }
   } else if (fuzzyResults.length > 1) {
-    const nombres = new Set();
-    const resumen = fuzzyResults.slice(0, 5).map(r => {
+    const productosAgrupados = {};
+    for (const r of fuzzyResults) {
       const p = r.item;
-      const clave = normalizarTexto(p.name).replace(/\s+/g, "");
-      if (nombres.has(clave)) return null;
-      nombres.add(clave);
-      return `- ${p.name}: ${p.price} COP por ${p.unit}`;
-    }).filter(Boolean).join("\n");
-
-    if (resumen) {
-      pedidoContext = `El cliente mencionó algo relacionado con productos similares. Aquí hay varias coincidencias posibles:\n${resumen}\nPresenta estas opciones de forma clara y pregunta cuál desea. No preguntes por modelo de impresora u otros detalles adicionales.`;
+      const clave = `${p.name.toLowerCase()}-${p.color?.toLowerCase()}`;
+      if (!productosAgrupados[clave]) productosAgrupados[clave] = [];
+      productosAgrupados[clave].push(p);
     }
+
+    let resumen = "";
+    for (const grupo in productosAgrupados) {
+      const variantes = productosAgrupados[grupo];
+      const nombre = variantes[0].name;
+      const color = variantes[0].color;
+      const detalles = variantes.map(v => `${v.brand}: ${v.price} COP`).join(" | ");
+      resumen += `- ${nombre} ${color}: ${detalles}\n`;
+    }
+
+    pedidoContext = `El cliente podría estar interesado en los siguientes productos:
+${resumen.trim()}
+Presenta estas opciones de forma clara y pregunta cuál desea.`;
   }
 
   const messages = [
