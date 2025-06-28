@@ -92,9 +92,7 @@ app.post("/webhook", async (req, res) => {
       resumen += `- ${nombre} ${color}: ${detalles}\n`;
     }
 
-    pedidoContext = `El cliente podría estar interesado en los siguientes productos:
-${resumen.trim()}
-Presenta estas opciones de forma clara y pregunta cuál desea.`;
+    pedidoContext = `El cliente podría estar interesado en los siguientes productos:\n${resumen.trim()}\nPresenta estas opciones de forma clara y pregunta cuál desea.`;
   }
 
   const messages = [
