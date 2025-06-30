@@ -4,6 +4,23 @@ const app = express();
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
+const { MongoClient } = require("mongodb");
+require("dotenv").config();
+
+const client = new MongoClient(process.env.MONGODB_URI);
+let db;
+
+async function connectToDB() {
+  try {
+    await client.connect();
+    db = client.db("Galaxy");
+    console.log("Conectado a MongoDB");
+  } catch (error) {
+    console.error("Error conectando a MongoDB:", error);
+  }
+}
+connectToDB();
+
 // NUEVO: colección de pedidos
 // ...dentro de tu webhook principal
 app.post("/webhook", async (req, res) => {
@@ -116,3 +133,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Servidor corriendo en el puerto", PORT);
 });
+
