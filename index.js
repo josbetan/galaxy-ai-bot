@@ -111,3 +111,8 @@ No debes hablar de otros temas fuera de este contexto, y siempre debes mantener 
     return res.send("Ocurrió un error. Por favor intenta más tarde.");
   }
 });
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log("Servidor corriendo en el puerto", PORT);
+});
