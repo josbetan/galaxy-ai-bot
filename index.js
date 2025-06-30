@@ -1,11 +1,12 @@
 const express = require("express");
-const app = express();
-
-app.use(express.urlencoded({ extended: false }));
-app.use(express.json());
-
+const Fuse = require("fuse.js");
+const axios = require("axios");
 const { MongoClient } = require("mongodb");
 require("dotenv").config();
+
+const app = express();
+app.use(express.urlencoded({ extended: false }));
+app.use(express.json());
 
 const client = new MongoClient(process.env.MONGODB_URI);
 let db;
@@ -21,49 +22,78 @@ async function connectToDB() {
 }
 connectToDB();
 
-// NUEVO: colección de pedidos
-// ...dentro de tu webhook principal
+// Función para detectar cantidad y unidad en el mensaje
+function detectarCantidadUnidad(mensaje) {
+  const regex = /(\d+)\s?(unidades?|metros?|mts?|m|u|litros?|l)?/i;
+  const match = mensaje.match(regex);
+  if (match) {
+    return {
+      cantidad: parseInt(match[1]),
+      unidad: match[2] || null
+    };
+  }
+  return null;
+}
+
+// Función para limpiar y ordenar texto
+function procesarTexto(texto) {
+  return texto
+    .toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // quitar tildes
+    .split(/\s+/)
+    .sort()
+    .join(" ");
+}
+
 app.post("/webhook", async (req, res) => {
   const userMessage = req.body.Body || "";
   const from = req.body.From || "";
 
   const conversationCollection = db.collection("Conversations");
-  const pedidosCollection = db.collection("Orders");
+
+  // Historial de conversación
   const previousMessages = await conversationCollection
     .find({ from })
     .sort({ timestamp: -1 })
     .limit(19)
     .toArray();
 
+  // Procesar texto del usuario para búsqueda
+  const mensajeProcesado = procesarTexto(userMessage);
+
+  // Búsqueda de producto usando searchIndex
   const products = await db.collection("Products").find({}).toArray();
-  const mensajeLimpio = normalizarTexto(userMessage);
 
   const fuse = new Fuse(products, {
     keys: ['searchIndex'],
     threshold: 0.3,
-    includeScore: true,
-    ignoreLocation: true
+    includeScore: true
   });
 
-  const fuzzyResults = fuse.search(mensajeLimpio);
-  const cantidades = detectarCantidadUnidad(userMessage);
+  const fuzzyResults = fuse.search(mensajeProcesado);
+  let bestMatch = null;
 
-  let pedidoContext = "";
-  let posiblePedido = null;
+  if (fuzzyResults.length > 0) {
+    const topScore = fuzzyResults[0].score;
+    const topResults = fuzzyResults.filter(r => r.score <= topScore + 0.01);
 
-  if (fuzzyResults.length === 1) {
-    const bestMatch = fuzzyResults[0].item;
-    const cantidad = cantidades[0];
-    if (cantidad) {
-      pedidoContext = `El cliente indicó que desea ${cantidad.cantidad} ${cantidad.unidad || bestMatch.unit} del producto "${bestMatch.name}" (${bestMatch.brand}), cuyo precio es ${bestMatch.price} COP por ${bestMatch.unit}. Pregúntale si desea registrar el pedido.`;
-      posiblePedido = {
-        producto: bestMatch.name,
-        marca: bestMatch.brand,
-        cantidad: cantidad.cantidad,
-        unidad: cantidad.unidad || bestMatch.unit,
-        precioUnitario: bestMatch.price
-      };
+    if (topResults.length === 1) {
+      bestMatch = topResults[0].item;
+    } else {
+      bestMatch = topResults.find(r =>
+        userMessage.toLowerCase().includes(r.item.name.toLowerCase())
+      )?.item || topResults[0].item;
     }
+  }
+
+  const cantidadDetectada = detectarCantidadUnidad(userMessage);
+
+  // Contexto para OpenAI
+  let pedidoContext = "";
+  if (bestMatch && cantidadDetectada) {
+    pedidoContext = `El cliente indicó que desea ${cantidadDetectada.cantidad} ${cantidadDetectada.unidad || bestMatch.unit} del producto "${bestMatch.name}", cuyo precio es ${bestMatch.price} COP por ${bestMatch.unit}. No necesitas preguntar por modelo de impresora, tipo de tinta ni otros detalles adicionales. Usa esta información para responder de forma clara, natural y enfocada.`;
+  } else if (bestMatch) {
+    pedidoContext = `El cliente podría estar interesado en el producto "${bestMatch.name}", cuyo precio es ${bestMatch.price} COP por ${bestMatch.unit}. No necesitas preguntar por modelo de impresora, tipo de tinta ni otros detalles adicionales. Usa esta información para responder de forma clara y profesional.`;
   }
 
   const messages = [
@@ -91,7 +121,12 @@ No debes hablar de otros temas fuera de este contexto, y siempre debes mantener 
     { role: "user", content: userMessage }
   ];
 
-  await conversationCollection.insertOne({ from, role: "user", content: userMessage, timestamp: new Date() });
+  await conversationCollection.insertOne({
+    from,
+    role: "user",
+    content: userMessage,
+    timestamp: new Date()
+  });
 
   try {
     const response = await axios.post(
@@ -110,16 +145,12 @@ No debes hablar de otros temas fuera de este contexto, y siempre debes mantener 
 
     const reply = response.data.choices[0].message.content;
 
-    await conversationCollection.insertOne({ from, role: "assistant", content: reply, timestamp: new Date() });
-
-    // Detectar confirmación del pedido (GPT lo invitará a confirmar)
-    if (posiblePedido && /\b(s[ií]?[ ,]?deseo|registrar|hacer pedido|confirmar)\b/i.test(userMessage)) {
-      await pedidosCollection.insertOne({
-        ...posiblePedido,
-        from,
-        fecha: new Date()
-      });
-    }
+    await conversationCollection.insertOne({
+      from,
+      role: "assistant",
+      content: reply,
+      timestamp: new Date()
+    });
 
     res.set("Content-Type", "text/plain");
     return res.send(reply);
@@ -131,6 +162,6 @@ No debes hablar de otros temas fuera de este contexto, y siempre debes mantener 
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log("Servidor corriendo en el puerto", PORT);
+  console.log("Servidor corriendo en puerto", PORT);
 });
 
