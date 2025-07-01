@@ -39,7 +39,7 @@ app.post("/webhook", async (req, res) => {
 
   const cleanedUserMessage = userMessage
     .toLowerCase()
-    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .normalize("NFD").replace(/[̀-ͯ]/g, "")
     .replace(/[^\w\s]/g, "")
     .split(/\s+/)
     .sort()
@@ -53,19 +53,62 @@ app.post("/webhook", async (req, res) => {
   const fuzzyResults = fuse.search(cleanedUserMessage);
   let pedidoContext = "";
 
-  const cantidadRegex = /(?:\b(?:quiero|necesito|dame|envíame|enviame|deme|solicito)\b\s*)?(\d+)\s*(unidades|unidad|metros|litros|tintas|metro|tinta|litro)?/i;
+  const cantidadRegex = /(?:\b(?:quiero|necesito|dame|env\u00edame|enviame|deme|solicito)\b\s*)?(\d+)\s*(unidades|unidad|metros|litros|tintas|metro|tinta|litro)?/i;
   const cantidadMatch = userMessage.match(cantidadRegex);
   const cantidad = cantidadMatch ? parseInt(cantidadMatch[1]) : null;
 
-  if (fuzzyResults.length > 0) {
+  const contienePalabra = (palabra) => new RegExp("\\b" + palabra + "\\b", "i").test(userMessage);
+  const colores = ['magenta', 'cyan', 'amarillo', 'amarilla', 'negro', 'negra'];
+  const contieneColores = colores.filter(color => contienePalabra(color));
+  const contieneColor = contieneColores.length > 0;
+  const contieneTinta = contienePalabra("tinta") || contienePalabra("tintas");
+  const contieneMarca = ['galaxy', 'eco'].some(marca => contienePalabra(marca));
+  const contieneOtraCategoria = ['vinilo', 'banner', 'impresora', 'repuesto'].some(cat => contienePalabra(cat));
+
+  if ((contieneColor && !contieneTinta && !contieneOtraCategoria) || (contieneTinta && !contieneColor && !contieneMarca)) {
+    const tintasDisponibles = products.filter(p => p.name.toLowerCase().includes("tinta") && p.stock > 0);
+    const porMarca = tintasDisponibles.reduce((acc, item) => {
+      const marca = item.name.toLowerCase().includes("galaxy") ? "Galaxy" : item.name.toLowerCase().includes("eco") ? "Eco" : "Otra";
+      if (!acc[marca]) acc[marca] = [];
+      acc[marca].push(item);
+      return acc;
+    }, {});
+
+    pedidoContext = "Tenemos tintas disponibles en los siguientes colores y marcas:\n";
+    for (const marca in porMarca) {
+      const colores = porMarca[marca].map(p => p.name.match(/tinta (\w+)/i)?.[1] || "").join(", ");
+      const precio = porMarca[marca][0].price;
+      pedidoContext += `- ${marca}: ${colores} (${precio} COP c/u)\n`;
+    }
+  } else if ((contieneColor && contieneTinta) || (contieneColor && !contieneOtraCategoria)) {
+    const opciones = products.filter(p => contieneColores.some(color => p.name.toLowerCase().includes(color)) && p.stock > 0);
+    if (opciones.length > 0) {
+      const agrupadas = opciones.reduce((acc, item) => {
+        const marca = item.name.toLowerCase().includes("galaxy") ? "Galaxy" : item.name.toLowerCase().includes("eco") ? "Eco" : "Otra";
+        if (!acc[marca]) acc[marca] = [];
+        acc[marca].push(item);
+        return acc;
+      }, {});
+
+      pedidoContext = "Tenemos las siguientes opciones disponibles:\n";
+      for (const marca in agrupadas) {
+        agrupadas[marca].forEach(p => {
+          pedidoContext += `- ${p.name} (${marca}): ${p.price} COP\n`;
+        });
+      }
+    } else {
+      pedidoContext = `Actualmente no tenemos stock disponible para los colores solicitados (${contieneColores.join(", ")}). Informaremos al equipo de logística para verificar disponibilidad.`;
+    }
+  } else if (fuzzyResults.length > 0 && fuzzyResults[0].item.stock > 0) {
     const bestMatch = fuzzyResults[0].item;
-
     pedidoContext = `Producto detectado: ${bestMatch.name}. Precio: ${bestMatch.price} COP por ${bestMatch.unit}.`;
-
     if (cantidad) {
       const total = bestMatch.price * cantidad;
       pedidoContext += ` El cliente desea ${cantidad} ${bestMatch.unit}(s), totalizando ${total} COP.`;
     }
+  } else if (fuzzyResults.length > 0 && fuzzyResults[0].item.stock === 0) {
+    const bestMatch = fuzzyResults[0].item;
+    pedidoContext = `El producto '${bestMatch.name}' actualmente no está disponible en stock. Hemos informado al equipo de logística para su validación.`;
   }
 
   const messages = [
@@ -131,3 +174,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Servidor corriendo en puerto", PORT);
 });
+
