@@ -58,16 +58,16 @@ app.post("/webhook", async (req, res) => {
   const cantidad = cantidadMatch ? parseInt(cantidadMatch[1]) : null;
 
   const contienePalabra = (palabra) => new RegExp("\\b" + palabra + "\\b", "i").test(userMessage);
-  const colores = ['magenta', 'cyan', 'amarillo', 'amarilla', 'negro', 'negra'];
-  const contieneColores = colores.filter(color => contienePalabra(color));
-  const contieneColor = contieneColores.length > 0;
+  const contieneColor = ['magenta', 'cyan', 'amarillo', 'amarilla', 'negro', 'negra'].some(color => contienePalabra(color));
   const contieneTinta = contienePalabra("tinta") || contienePalabra("tintas");
   const contieneMarca = ['galaxy', 'eco'].some(marca => contienePalabra(marca));
-  const contieneOtraCategoria = ['vinilo', 'banner', 'impresora', 'repuesto'].some(cat => contienePalabra(cat));
 
-  if ((contieneColor && !contieneTinta && !contieneOtraCategoria) || (contieneTinta && !contieneColor && !contieneMarca)) {
-    const tintasDisponibles = products.filter(p => p.name.toLowerCase().includes("tinta") && p.stock > 0);
-    const porMarca = tintasDisponibles.reduce((acc, item) => {
+  const obtenerDisponibles = (lista) => lista.filter(p => p.stock && p.stock > 0);
+  const notificarAgotado = (color, marca) => `Actualmente no tenemos stock disponible de tinta ${color}${marca ? ' marca ' + marca : ''}. Informaremos al equipo de logística para su reposición.`;
+
+  if (contieneTinta && !contieneColor && !contieneMarca) {
+    const tintas = obtenerDisponibles(products.filter(p => p.name.toLowerCase().includes("tinta")));
+    const porMarca = tintas.reduce((acc, item) => {
       const marca = item.name.toLowerCase().includes("galaxy") ? "Galaxy" : item.name.toLowerCase().includes("eco") ? "Eco" : "Otra";
       if (!acc[marca]) acc[marca] = [];
       acc[marca].push(item);
@@ -76,12 +76,13 @@ app.post("/webhook", async (req, res) => {
 
     pedidoContext = "Tenemos tintas disponibles en los siguientes colores y marcas:\n";
     for (const marca in porMarca) {
-      const colores = porMarca[marca].map(p => p.name.match(/tinta (\w+)/i)?.[1] || "").join(", ");
-      const precio = porMarca[marca][0].price;
-      pedidoContext += `- ${marca}: ${colores} (${precio} COP c/u)\n`;
+      porMarca[marca].forEach(p => {
+        pedidoContext += `- ${p.name}: ${p.price} COP\n`;
+      });
     }
-  } else if ((contieneColor && contieneTinta) || (contieneColor && !contieneOtraCategoria)) {
-    const opciones = products.filter(p => contieneColores.some(color => p.name.toLowerCase().includes(color)) && p.stock > 0);
+  } else if ((contieneTinta || contieneColor) && !contieneMarca) {
+    const coloresDetectados = ['magenta', 'cyan', 'amarillo', 'amarilla', 'negro', 'negra'].filter(color => contienePalabra(color));
+    const opciones = obtenerDisponibles(products.filter(p => coloresDetectados.some(color => p.name.toLowerCase().includes(color))));
     if (opciones.length > 0) {
       const agrupadas = opciones.reduce((acc, item) => {
         const marca = item.name.toLowerCase().includes("galaxy") ? "Galaxy" : item.name.toLowerCase().includes("eco") ? "Eco" : "Otra";
@@ -89,7 +90,6 @@ app.post("/webhook", async (req, res) => {
         acc[marca].push(item);
         return acc;
       }, {});
-
       pedidoContext = "Tenemos las siguientes opciones disponibles:\n";
       for (const marca in agrupadas) {
         agrupadas[marca].forEach(p => {
@@ -97,18 +97,19 @@ app.post("/webhook", async (req, res) => {
         });
       }
     } else {
-      pedidoContext = `Actualmente no tenemos stock disponible para los colores solicitados (${contieneColores.join(", ")}). Informaremos al equipo de logística para verificar disponibilidad.`;
+      pedidoContext = `Lamentablemente no tenemos disponibilidad para tinta(s) ${coloresDetectados.join(", ")} en este momento. Notificaremos a logística.`;
     }
-  } else if (fuzzyResults.length > 0 && fuzzyResults[0].item.stock > 0) {
+  } else if (fuzzyResults.length > 0) {
     const bestMatch = fuzzyResults[0].item;
-    pedidoContext = `Producto detectado: ${bestMatch.name}. Precio: ${bestMatch.price} COP por ${bestMatch.unit}.`;
-    if (cantidad) {
-      const total = bestMatch.price * cantidad;
-      pedidoContext += ` El cliente desea ${cantidad} ${bestMatch.unit}(s), totalizando ${total} COP.`;
+    if (bestMatch.stock && bestMatch.stock > 0) {
+      pedidoContext = `Producto detectado: ${bestMatch.name}. Precio: ${bestMatch.price} COP por ${bestMatch.unit}.`;
+      if (cantidad) {
+        const total = bestMatch.price * cantidad;
+        pedidoContext += ` El cliente desea ${cantidad} ${bestMatch.unit}(s), totalizando ${total} COP.`;
+      }
+    } else {
+      pedidoContext = notificarAgotado(bestMatch.name);
     }
-  } else if (fuzzyResults.length > 0 && fuzzyResults[0].item.stock === 0) {
-    const bestMatch = fuzzyResults[0].item;
-    pedidoContext = `El producto '${bestMatch.name}' actualmente no está disponible en stock. Hemos informado al equipo de logística para su validación.`;
   }
 
   const messages = [
@@ -174,4 +175,3 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Servidor corriendo en puerto", PORT);
 });
-
