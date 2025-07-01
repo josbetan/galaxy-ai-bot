@@ -28,7 +28,7 @@ app.post("/webhook", async (req, res) => {
 
   const conversationCollection = db.collection("Conversations");
   const productCollection = db.collection("Products");
-  const ordersCollection = db.collection("Orders");
+  const pedidoCollection = db.collection("Pedidos");
 
   const previousMessages = await conversationCollection
     .find({ from })
@@ -53,39 +53,19 @@ app.post("/webhook", async (req, res) => {
 
   const fuzzyResults = fuse.search(cleanedUserMessage);
   let pedidoContext = "";
-  let pedidoEnCurso = await ordersCollection.findOne({ from, status: "pendiente" });
+  let totalPedido = 0;
+  let productosPedido = [];
 
-  const cantidadRegex = /(?:\b(?:quiero|necesito|dame|envíame|enviame|deme|solicito)\b\s*)?(\d+)\s*(unidades|unidad|metros|litros|tintas|metro|tinta|litro)?/i;
-  const cantidadMatch = userMessage.match(cantidadRegex);
-  const cantidad = cantidadMatch ? parseInt(cantidadMatch[1]) : null;
-
+  const cantidadRegex = /(\d+)\s*(unidades|unidad|metros|litros|tintas|metro|tinta|litro)?/gi;
   const contienePalabra = (palabra) => new RegExp("\\b" + palabra + "\\b", "i").test(userMessage);
   const contieneColor = ['magenta', 'cyan', 'amarillo', 'amarilla', 'negro', 'negra'].some(color => contienePalabra(color));
   const contieneTinta = contienePalabra("tinta") || contienePalabra("tintas");
   const contieneMarca = ['galaxy', 'eco'].some(marca => contienePalabra(marca));
 
-  if (/mi nombre es|me llamo|soy/i.test(userMessage) && pedidoEnCurso && !pedidoEnCurso.cliente) {
-    const nombre = userMessage.match(/(?:mi nombre es|me llamo|soy)\s+(.*)/i)?.[1];
-    if (nombre) {
-      await ordersCollection.updateOne({ _id: pedidoEnCurso._id }, { $set: { cliente: { nombre } } });
-      pedidoContext = `Gracias ${nombre}. Ahora por favor indícame tu número de contacto y dirección de envío.`;
-    }
-  } else if (/\d{7,}/.test(userMessage) && pedidoEnCurso && pedidoEnCurso.cliente && !pedidoEnCurso.cliente.telefono) {
-    await ordersCollection.updateOne({ _id: pedidoEnCurso._id }, { $set: { "cliente.telefono": userMessage.match(/\d{7,}/)[0] } });
-    pedidoContext = `¡Gracias! Ahora solo falta tu dirección de envío para completar el pedido.`;
-  } else if (/calle|carrera|crr|cra|av|avenida|manzana|mz/i.test(userMessage) && pedidoEnCurso && pedidoEnCurso.cliente && pedidoEnCurso.cliente.telefono && !pedidoEnCurso.cliente.direccion) {
-    await ordersCollection.updateOne({ _id: pedidoEnCurso._id }, {
-      $set: {
-        "cliente.direccion": userMessage,
-        status: "confirmado",
-        confirmadoEn: new Date()
-      }
-    });
-    pedidoContext = `¡Perfecto! Tu pedido ha sido registrado y nuestro equipo se comunicará contigo pronto para coordinar el envío.`;
-  } else if (contieneTinta && !contieneColor && !contieneMarca) {
+  if (contieneTinta && !contieneColor && !contieneMarca) {
     const tintas = products.filter(p => p.name.toLowerCase().includes("tinta") && p.stock > 0);
     const porMarca = tintas.reduce((acc, item) => {
-      const marca = item.brand || "Otra";
+      const marca = item.brand || (item.name.toLowerCase().includes("galaxy") ? "Galaxy" : item.name.toLowerCase().includes("eco") ? "Eco" : "Otra");
       if (!acc[marca]) acc[marca] = [];
       acc[marca].push(item);
       return acc;
@@ -99,9 +79,9 @@ app.post("/webhook", async (req, res) => {
     }
   } else if (contieneTinta && contieneColor && !contieneMarca) {
     const coloresDetectados = ['magenta', 'cyan', 'amarillo', 'amarilla', 'negro', 'negra'].filter(color => contienePalabra(color));
-    const opciones = products.filter(p => coloresDetectados.some(color => p.name.toLowerCase().includes(color)) && p.stock > 0);
+    const opciones = products.filter(p => p.stock > 0 && coloresDetectados.some(color => p.name.toLowerCase().includes(color)));
     const agrupadas = opciones.reduce((acc, item) => {
-      const marca = item.brand || "Otra";
+      const marca = item.brand || (item.name.toLowerCase().includes("galaxy") ? "Galaxy" : item.name.toLowerCase().includes("eco") ? "Eco" : "Otra");
       if (!acc[marca]) acc[marca] = [];
       acc[marca].push(item);
       return acc;
@@ -114,23 +94,30 @@ app.post("/webhook", async (req, res) => {
       });
     }
   } else if (fuzzyResults.length > 0) {
-    const bestMatch = fuzzyResults[0].item;
-    if (bestMatch.stock > 0) {
-      pedidoContext = `Producto detectado: ${bestMatch.name}. Precio: ${bestMatch.price} COP por ${bestMatch.unit}.`;
-      if (cantidad) {
-        const total = bestMatch.price * cantidad;
-        pedidoContext += ` El cliente desea ${cantidad} ${bestMatch.unit}(s), totalizando ${total} COP.`;
-        await ordersCollection.insertOne({
-          from,
-          productos: [{ nombre: bestMatch.name, cantidad, precioUnitario: bestMatch.price }],
-          total,
-          status: "pendiente",
-          createdAt: new Date()
-        });
-        pedidoContext += ` ¿Deseas proceder con la compra? Si es así, por favor dime tu nombre completo.`;
+    const cantidadesDetectadas = [...userMessage.matchAll(cantidadRegex)];
+
+    for (const match of cantidadesDetectadas) {
+      const cantidad = parseInt(match[1]);
+      const palabra = match[2] || "";
+      const palabras = userMessage.toLowerCase().split(/\s+/);
+      for (const producto of products) {
+        const nombre = producto.name.toLowerCase();
+        const coincidencia = palabras.every(p => nombre.includes(p));
+        if (coincidencia && producto.stock >= cantidad) {
+          const subtotal = producto.price * cantidad;
+          totalPedido += subtotal;
+          productosPedido.push({ nombre: producto.name, cantidad, precio: producto.price });
+        }
       }
-    } else {
-      pedidoContext = `Lamentablemente, el producto ${bestMatch.name} no está disponible en este momento. Informaremos a nuestro equipo de logística.`;
+    }
+
+    if (productosPedido.length > 0) {
+      pedidoContext = "Resumen de tu pedido:\n";
+      productosPedido.forEach(p => {
+        pedidoContext += `- ${p.cantidad} x ${p.nombre} a ${p.precio} COP = ${p.cantidad * p.precio} COP\n`;
+      });
+      pedidoContext += `Total: ${totalPedido} COP.\n`;
+      pedidoContext += `¿Deseas continuar con el pedido? Por favor indícame tu nombre completo, número de contacto y dirección para gestionar tu envío.`;
     }
   }
 
