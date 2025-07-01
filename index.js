@@ -28,6 +28,7 @@ app.post("/webhook", async (req, res) => {
 
   const conversationCollection = db.collection("Conversations");
   const productCollection = db.collection("Products");
+  const ordersCollection = db.collection("Orders");
 
   const previousMessages = await conversationCollection
     .find({ from })
@@ -52,8 +53,9 @@ app.post("/webhook", async (req, res) => {
 
   const fuzzyResults = fuse.search(cleanedUserMessage);
   let pedidoContext = "";
+  let pedidoEnCurso = await ordersCollection.findOne({ from, status: "pendiente" });
 
-  const cantidadRegex = /(?:\b(?:quiero|necesito|dame|env\u00edame|enviame|deme|solicito)\b\s*)?(\d+)\s*(unidades|unidad|metros|litros|tintas|metro|tinta|litro)?/i;
+  const cantidadRegex = /(?:\b(?:quiero|necesito|dame|envíame|enviame|deme|solicito)\b\s*)?(\d+)\s*(unidades|unidad|metros|litros|tintas|metro|tinta|litro)?/i;
   const cantidadMatch = userMessage.match(cantidadRegex);
   const cantidad = cantidadMatch ? parseInt(cantidadMatch[1]) : null;
 
@@ -61,12 +63,29 @@ app.post("/webhook", async (req, res) => {
   const contieneColor = ['magenta', 'cyan', 'amarillo', 'amarilla', 'negro', 'negra'].some(color => contienePalabra(color));
   const contieneTinta = contienePalabra("tinta") || contienePalabra("tintas");
   const contieneMarca = ['galaxy', 'eco'].some(marca => contienePalabra(marca));
-  const contienePreguntaPrecio = /\b(precio|vale|cuestan|cuesta|valor|cuanto|sale)\b/i.test(userMessage);
 
-  if (contieneTinta && !contieneColor && !contieneMarca) {
+  if (/mi nombre es|me llamo|soy/i.test(userMessage) && pedidoEnCurso && !pedidoEnCurso.cliente) {
+    const nombre = userMessage.match(/(?:mi nombre es|me llamo|soy)\s+(.*)/i)?.[1];
+    if (nombre) {
+      await ordersCollection.updateOne({ _id: pedidoEnCurso._id }, { $set: { cliente: { nombre } } });
+      pedidoContext = `Gracias ${nombre}. Ahora por favor indícame tu número de contacto y dirección de envío.`;
+    }
+  } else if (/\d{7,}/.test(userMessage) && pedidoEnCurso && pedidoEnCurso.cliente && !pedidoEnCurso.cliente.telefono) {
+    await ordersCollection.updateOne({ _id: pedidoEnCurso._id }, { $set: { "cliente.telefono": userMessage.match(/\d{7,}/)[0] } });
+    pedidoContext = `¡Gracias! Ahora solo falta tu dirección de envío para completar el pedido.`;
+  } else if (/calle|carrera|crr|cra|av|avenida|manzana|mz/i.test(userMessage) && pedidoEnCurso && pedidoEnCurso.cliente && pedidoEnCurso.cliente.telefono && !pedidoEnCurso.cliente.direccion) {
+    await ordersCollection.updateOne({ _id: pedidoEnCurso._id }, {
+      $set: {
+        "cliente.direccion": userMessage,
+        status: "confirmado",
+        confirmadoEn: new Date()
+      }
+    });
+    pedidoContext = `¡Perfecto! Tu pedido ha sido registrado y nuestro equipo se comunicará contigo pronto para coordinar el envío.`;
+  } else if (contieneTinta && !contieneColor && !contieneMarca) {
     const tintas = products.filter(p => p.name.toLowerCase().includes("tinta") && p.stock > 0);
     const porMarca = tintas.reduce((acc, item) => {
-      const marca = item.brand || (item.name.toLowerCase().includes("galaxy") ? "Galaxy" : item.name.toLowerCase().includes("eco") ? "Eco" : "Otra");
+      const marca = item.brand || "Otra";
       if (!acc[marca]) acc[marca] = [];
       acc[marca].push(item);
       return acc;
@@ -78,35 +97,40 @@ app.post("/webhook", async (req, res) => {
       const precio = porMarca[marca][0].price;
       pedidoContext += `- ${marca}: ${colores} (${precio} COP c/u)\n`;
     }
-  } else if (contieneColor && !contieneMarca) {
+  } else if (contieneTinta && contieneColor && !contieneMarca) {
     const coloresDetectados = ['magenta', 'cyan', 'amarillo', 'amarilla', 'negro', 'negra'].filter(color => contienePalabra(color));
     const opciones = products.filter(p => coloresDetectados.some(color => p.name.toLowerCase().includes(color)) && p.stock > 0);
-    if (opciones.length === 0) {
-      pedidoContext = `Lamentablemente no tenemos stock disponible para tinta ${coloresDetectados.join(", ")}. Informaremos al equipo de logística.`;
-    } else {
-      const agrupadas = opciones.reduce((acc, item) => {
-        const marca = item.brand || (item.name.toLowerCase().includes("galaxy") ? "Galaxy" : item.name.toLowerCase().includes("eco") ? "Eco" : "Otra");
-        if (!acc[marca]) acc[marca] = [];
-        acc[marca].push(item);
-        return acc;
-      }, {});
-      pedidoContext = "Tenemos las siguientes opciones disponibles:\n";
-      for (const marca in agrupadas) {
-        agrupadas[marca].forEach(p => {
-          pedidoContext += `- ${p.name} (${marca}): ${p.price} COP\n`;
-        });
-      }
+    const agrupadas = opciones.reduce((acc, item) => {
+      const marca = item.brand || "Otra";
+      if (!acc[marca]) acc[marca] = [];
+      acc[marca].push(item);
+      return acc;
+    }, {});
+
+    pedidoContext = "Tenemos las siguientes opciones disponibles:\n";
+    for (const marca in agrupadas) {
+      agrupadas[marca].forEach(p => {
+        pedidoContext += `- ${p.name} (${marca}): ${p.price} COP\n`;
+      });
     }
   } else if (fuzzyResults.length > 0) {
     const bestMatch = fuzzyResults[0].item;
-    if (bestMatch.stock <= 0) {
-      pedidoContext = `El producto ${bestMatch.name} no está disponible actualmente. Informaremos al equipo de logística.`;
-    } else {
+    if (bestMatch.stock > 0) {
       pedidoContext = `Producto detectado: ${bestMatch.name}. Precio: ${bestMatch.price} COP por ${bestMatch.unit}.`;
       if (cantidad) {
         const total = bestMatch.price * cantidad;
         pedidoContext += ` El cliente desea ${cantidad} ${bestMatch.unit}(s), totalizando ${total} COP.`;
+        await ordersCollection.insertOne({
+          from,
+          productos: [{ nombre: bestMatch.name, cantidad, precioUnitario: bestMatch.price }],
+          total,
+          status: "pendiente",
+          createdAt: new Date()
+        });
+        pedidoContext += ` ¿Deseas proceder con la compra? Si es así, por favor dime tu nombre completo.`;
       }
+    } else {
+      pedidoContext = `Lamentablemente, el producto ${bestMatch.name} no está disponible en este momento. Informaremos a nuestro equipo de logística.`;
     }
   }
 
