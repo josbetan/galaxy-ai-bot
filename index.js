@@ -53,7 +53,7 @@ app.post("/webhook", async (req, res) => {
   const fuzzyResults = fuse.search(cleanedUserMessage);
   let pedidoContext = "";
 
-  const cantidadRegex = /(?:\b(?:quiero|necesito|dame|envíame|enviame|deme|solicito)\b\s*)?(\d+)\s*(unidades|unidad|metros|litros|tintas|metro|tinta|litro)?/i;
+  const cantidadRegex = /(?:\b(?:quiero|necesito|dame|env\u00edame|enviame|deme|solicito)\b\s*)?(\d+)\s*(unidades|unidad|metros|litros|tintas|metro|tinta|litro)?/i;
   const cantidadMatch = userMessage.match(cantidadRegex);
   const cantidad = cantidadMatch ? parseInt(cantidadMatch[1]) : null;
 
@@ -61,11 +61,12 @@ app.post("/webhook", async (req, res) => {
   const contieneColor = ['magenta', 'cyan', 'amarillo', 'amarilla', 'negro', 'negra'].some(color => contienePalabra(color));
   const contieneTinta = contienePalabra("tinta") || contienePalabra("tintas");
   const contieneMarca = ['galaxy', 'eco'].some(marca => contienePalabra(marca));
+  const contienePreguntaPrecio = /\b(precio|vale|cuestan|cuesta|valor|cuanto|sale)\b/i.test(userMessage);
 
   if (contieneTinta && !contieneColor && !contieneMarca) {
     const tintas = products.filter(p => p.name.toLowerCase().includes("tinta") && p.stock > 0);
     const porMarca = tintas.reduce((acc, item) => {
-      const marca = item.brand || "Otra";
+      const marca = item.brand || (item.name.toLowerCase().includes("galaxy") ? "Galaxy" : item.name.toLowerCase().includes("eco") ? "Eco" : "Otra");
       if (!acc[marca]) acc[marca] = [];
       acc[marca].push(item);
       return acc;
@@ -77,32 +78,35 @@ app.post("/webhook", async (req, res) => {
       const precio = porMarca[marca][0].price;
       pedidoContext += `- ${marca}: ${colores} (${precio} COP c/u)\n`;
     }
-  } else if (contieneTinta && contieneColor && !contieneMarca) {
+  } else if (contieneColor && !contieneMarca) {
     const coloresDetectados = ['magenta', 'cyan', 'amarillo', 'amarilla', 'negro', 'negra'].filter(color => contienePalabra(color));
     const opciones = products.filter(p => coloresDetectados.some(color => p.name.toLowerCase().includes(color)) && p.stock > 0);
-    const agrupadas = opciones.reduce((acc, item) => {
-      const marca = item.brand || "Otra";
-      if (!acc[marca]) acc[marca] = [];
-      acc[marca].push(item);
-      return acc;
-    }, {});
-
-    pedidoContext = "Tenemos las siguientes opciones disponibles:\n";
-    for (const marca in agrupadas) {
-      agrupadas[marca].forEach(p => {
-        pedidoContext += `- ${p.name} (${marca}): ${p.price} COP\n`;
-      });
+    if (opciones.length === 0) {
+      pedidoContext = `Lamentablemente no tenemos stock disponible para tinta ${coloresDetectados.join(", ")}. Informaremos al equipo de logística.`;
+    } else {
+      const agrupadas = opciones.reduce((acc, item) => {
+        const marca = item.brand || (item.name.toLowerCase().includes("galaxy") ? "Galaxy" : item.name.toLowerCase().includes("eco") ? "Eco" : "Otra");
+        if (!acc[marca]) acc[marca] = [];
+        acc[marca].push(item);
+        return acc;
+      }, {});
+      pedidoContext = "Tenemos las siguientes opciones disponibles:\n";
+      for (const marca in agrupadas) {
+        agrupadas[marca].forEach(p => {
+          pedidoContext += `- ${p.name} (${marca}): ${p.price} COP\n`;
+        });
+      }
     }
   } else if (fuzzyResults.length > 0) {
     const bestMatch = fuzzyResults[0].item;
-    if (bestMatch.stock > 0) {
+    if (bestMatch.stock <= 0) {
+      pedidoContext = `El producto ${bestMatch.name} no está disponible actualmente. Informaremos al equipo de logística.`;
+    } else {
       pedidoContext = `Producto detectado: ${bestMatch.name}. Precio: ${bestMatch.price} COP por ${bestMatch.unit}.`;
       if (cantidad) {
         const total = bestMatch.price * cantidad;
         pedidoContext += ` El cliente desea ${cantidad} ${bestMatch.unit}(s), totalizando ${total} COP.`;
       }
-    } else {
-      pedidoContext = `Actualmente no tenemos disponibilidad de ${bestMatch.name}. Notificaremos al equipo de logística para que revise el inventario.`;
     }
   }
 
