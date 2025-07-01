@@ -22,78 +22,50 @@ async function connectToDB() {
 }
 connectToDB();
 
-// Función para detectar cantidad y unidad en el mensaje
-function detectarCantidadUnidad(mensaje) {
-  const regex = /(\d+)\s?(unidades?|metros?|mts?|m|u|litros?|l)?/i;
-  const match = mensaje.match(regex);
-  if (match) {
-    return {
-      cantidad: parseInt(match[1]),
-      unidad: match[2] || null
-    };
-  }
-  return null;
-}
-
-// Función para limpiar y ordenar texto
-function procesarTexto(texto) {
-  return texto
-    .toLowerCase()
-    .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // quitar tildes
-    .split(/\s+/)
-    .sort()
-    .join(" ");
-}
-
 app.post("/webhook", async (req, res) => {
   const userMessage = req.body.Body || "";
   const from = req.body.From || "";
 
   const conversationCollection = db.collection("Conversations");
+  const productCollection = db.collection("Products");
 
-  // Historial de conversación
   const previousMessages = await conversationCollection
     .find({ from })
     .sort({ timestamp: -1 })
     .limit(19)
     .toArray();
 
-  // Procesar texto del usuario para búsqueda
-  const mensajeProcesado = procesarTexto(userMessage);
+  const products = await productCollection.find({}).toArray();
 
-  // Búsqueda de producto usando searchIndex
-  const products = await db.collection("Products").find({}).toArray();
+  const cleanedUserMessage = userMessage
+    .toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\w\s]/g, "")
+    .split(/\s+/)
+    .sort()
+    .join(" ");
 
   const fuse = new Fuse(products, {
     keys: ['searchIndex'],
-    threshold: 0.3,
-    includeScore: true
+    threshold: 0.4,
   });
 
-  const fuzzyResults = fuse.search(mensajeProcesado);
-  let bestMatch = null;
+  const fuzzyResults = fuse.search(cleanedUserMessage);
+  let pedidoContext = "";
+
+  const cantidadRegex = /(?:\b(?:quiero|necesito|dame|envíame|enviame|deme|solicito)\b\s*)?(\d+)\s*(unidades|unidad|metros|litros|tintas|metro|tinta|litro)?/i;
+  const cantidadMatch = userMessage.match(cantidadRegex);
+  const cantidad = cantidadMatch ? parseInt(cantidadMatch[1]) : null;
 
   if (fuzzyResults.length > 0) {
-    const topScore = fuzzyResults[0].score;
-    const topResults = fuzzyResults.filter(r => r.score <= topScore + 0.01);
+    const bestMatch = fuzzyResults[0].item;
 
-    if (topResults.length === 1) {
-      bestMatch = topResults[0].item;
-    } else {
-      bestMatch = topResults.find(r =>
-        userMessage.toLowerCase().includes(r.item.name.toLowerCase())
-      )?.item || topResults[0].item;
+    pedidoContext = `Producto detectado: ${bestMatch.name}. Precio: ${bestMatch.price} COP por ${bestMatch.unit}.`;
+
+    if (cantidad) {
+      const total = bestMatch.price * cantidad;
+      pedidoContext += ` El cliente desea ${cantidad} ${bestMatch.unit}(s), totalizando ${total} COP.`;
     }
-  }
-
-  const cantidadDetectada = detectarCantidadUnidad(userMessage);
-
-  // Contexto para OpenAI
-  let pedidoContext = "";
-  if (bestMatch && cantidadDetectada) {
-    pedidoContext = `El cliente indicó que desea ${cantidadDetectada.cantidad} ${cantidadDetectada.unidad || bestMatch.unit} del producto "${bestMatch.name}", cuyo precio es ${bestMatch.price} COP por ${bestMatch.unit}. No necesitas preguntar por modelo de impresora, tipo de tinta ni otros detalles adicionales. Usa esta información para responder de forma clara, natural y enfocada.`;
-  } else if (bestMatch) {
-    pedidoContext = `El cliente podría estar interesado en el producto "${bestMatch.name}", cuyo precio es ${bestMatch.price} COP por ${bestMatch.unit}. No necesitas preguntar por modelo de impresora, tipo de tinta ni otros detalles adicionales. Usa esta información para responder de forma clara y profesional.`;
   }
 
   const messages = [
@@ -114,19 +86,14 @@ Tu función es atender clientes profesionalmente, responder preguntas sobre prod
 
 Aunque tengas capacidad para hablar de otros temas, no se te permite hacerlo. Solo puedes hablar del origen de tu nombre si el usuario lo pregunta. Puedes parafrasear que GaBo viene de la combinación de Gabriel y Bot, en honor a Gabriel un hermoso niño amado por sus padres. Muchos piensan que "Ga" viene de Galaxy y Bot, lo cual también resulta curioso ya que dicha sílaba coincide con "Ga".
 
-No debes hablar de otros temas fuera de este contexto, y siempre debes mantener un tono servicial, profesional y enfocado en el negocio de impresión y materiales gráficos.`
+No debes hablar de otros temas fuera de este contexto, y siempre debes mantener un tono servicial, profesional y enfocado en el negocio de impresión y materiales gráficos.
+${pedidoContext}`
     },
-    ...(pedidoContext ? [{ role: "system", content: pedidoContext }] : []),
     ...previousMessages.reverse().map(m => ({ role: m.role, content: m.content })),
     { role: "user", content: userMessage }
   ];
 
-  await conversationCollection.insertOne({
-    from,
-    role: "user",
-    content: userMessage,
-    timestamp: new Date()
-  });
+  await conversationCollection.insertOne({ from, role: "user", content: userMessage, timestamp: new Date() });
 
   try {
     const response = await axios.post(
@@ -164,4 +131,3 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Servidor corriendo en puerto", PORT);
 });
-
