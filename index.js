@@ -53,7 +53,7 @@ app.post("/webhook", async (req, res) => {
   const fuzzyResults = fuse.search(cleanedUserMessage);
   let pedidoContext = "";
 
-  const cantidadRegex = /(?:\b(?:quiero|necesito|dame|env\u00edame|enviame|deme|solicito)\b\s*)?(\d+)\s*(unidades|unidad|metros|litros|tintas|metro|tinta|litro)?/i;
+  const cantidadRegex = /(?:\b(?:quiero|necesito|dame|envíame|enviame|deme|solicito)\b\s*)?(\d+)\s*(unidades|unidad|metros|litros|tintas|metro|tinta|litro)?/i;
   const cantidadMatch = userMessage.match(cantidadRegex);
   const cantidad = cantidadMatch ? parseInt(cantidadMatch[1]) : null;
 
@@ -62,13 +62,10 @@ app.post("/webhook", async (req, res) => {
   const contieneTinta = contienePalabra("tinta") || contienePalabra("tintas");
   const contieneMarca = ['galaxy', 'eco'].some(marca => contienePalabra(marca));
 
-  const obtenerDisponibles = (lista) => lista.filter(p => p.stock && p.stock > 0);
-  const notificarAgotado = (color, marca) => `Actualmente no tenemos stock disponible de tinta ${color}${marca ? ' marca ' + marca : ''}. Informaremos al equipo de logística para su reposición.`;
-
   if (contieneTinta && !contieneColor && !contieneMarca) {
-    const tintas = obtenerDisponibles(products.filter(p => p.name.toLowerCase().includes("tinta")));
+    const tintas = products.filter(p => p.name.toLowerCase().includes("tinta") && p.stock > 0);
     const porMarca = tintas.reduce((acc, item) => {
-      const marca = item.name.toLowerCase().includes("galaxy") ? "Galaxy" : item.name.toLowerCase().includes("eco") ? "Eco" : "Otra";
+      const marca = item.brand || "Otra";
       if (!acc[marca]) acc[marca] = [];
       acc[marca].push(item);
       return acc;
@@ -76,39 +73,36 @@ app.post("/webhook", async (req, res) => {
 
     pedidoContext = "Tenemos tintas disponibles en los siguientes colores y marcas:\n";
     for (const marca in porMarca) {
-      porMarca[marca].forEach(p => {
-        pedidoContext += `- ${p.name}: ${p.price} COP\n`;
-      });
+      const colores = porMarca[marca].map(p => p.name.match(/tinta (\w+)/i)?.[1] || "").join(", ");
+      const precio = porMarca[marca][0].price;
+      pedidoContext += `- ${marca}: ${colores} (${precio} COP c/u)\n`;
     }
-  } else if ((contieneTinta || contieneColor) && !contieneMarca) {
+  } else if (contieneTinta && contieneColor && !contieneMarca) {
     const coloresDetectados = ['magenta', 'cyan', 'amarillo', 'amarilla', 'negro', 'negra'].filter(color => contienePalabra(color));
-    const opciones = obtenerDisponibles(products.filter(p => coloresDetectados.some(color => p.name.toLowerCase().includes(color))));
-    if (opciones.length > 0) {
-      const agrupadas = opciones.reduce((acc, item) => {
-        const marca = item.name.toLowerCase().includes("galaxy") ? "Galaxy" : item.name.toLowerCase().includes("eco") ? "Eco" : "Otra";
-        if (!acc[marca]) acc[marca] = [];
-        acc[marca].push(item);
-        return acc;
-      }, {});
-      pedidoContext = "Tenemos las siguientes opciones disponibles:\n";
-      for (const marca in agrupadas) {
-        agrupadas[marca].forEach(p => {
-          pedidoContext += `- ${p.name} (${marca}): ${p.price} COP\n`;
-        });
-      }
-    } else {
-      pedidoContext = `Lamentablemente no tenemos disponibilidad para tinta(s) ${coloresDetectados.join(", ")} en este momento. Notificaremos a logística.`;
+    const opciones = products.filter(p => coloresDetectados.some(color => p.name.toLowerCase().includes(color)) && p.stock > 0);
+    const agrupadas = opciones.reduce((acc, item) => {
+      const marca = item.brand || "Otra";
+      if (!acc[marca]) acc[marca] = [];
+      acc[marca].push(item);
+      return acc;
+    }, {});
+
+    pedidoContext = "Tenemos las siguientes opciones disponibles:\n";
+    for (const marca in agrupadas) {
+      agrupadas[marca].forEach(p => {
+        pedidoContext += `- ${p.name} (${marca}): ${p.price} COP\n`;
+      });
     }
   } else if (fuzzyResults.length > 0) {
     const bestMatch = fuzzyResults[0].item;
-    if (bestMatch.stock && bestMatch.stock > 0) {
+    if (bestMatch.stock > 0) {
       pedidoContext = `Producto detectado: ${bestMatch.name}. Precio: ${bestMatch.price} COP por ${bestMatch.unit}.`;
       if (cantidad) {
         const total = bestMatch.price * cantidad;
         pedidoContext += ` El cliente desea ${cantidad} ${bestMatch.unit}(s), totalizando ${total} COP.`;
       }
     } else {
-      pedidoContext = notificarAgotado(bestMatch.name);
+      pedidoContext = `Actualmente no tenemos disponibilidad de ${bestMatch.name}. Notificaremos al equipo de logística para que revise el inventario.`;
     }
   }
 
