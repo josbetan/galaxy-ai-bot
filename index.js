@@ -28,7 +28,7 @@ app.post("/webhook", async (req, res) => {
 
   const conversationCollection = db.collection("Conversations");
   const productCollection = db.collection("Products");
-  const pedidoCollection = db.collection("Orders");
+  const orderCollection = db.collection("Orders");
 
   const previousMessages = await conversationCollection
     .find({ from })
@@ -40,106 +40,60 @@ app.post("/webhook", async (req, res) => {
 
   const cleanedUserMessage = userMessage
     .toLowerCase()
-    .normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
     .replace(/[^\w\s]/g, "")
     .split(/\s+/)
     .sort()
     .join(" ");
 
   const fuse = new Fuse(products, {
-    keys: ['searchIndex'],
+    keys: ["searchIndex"],
     threshold: 0.4,
   });
 
   const fuzzyResults = fuse.search(cleanedUserMessage);
+
+  const cantidadRegex = /(?:(\d+)\s*x?\s*)?(magenta|cyan|amarillo|amarilla|negro|negra)\s*(galaxy|eco)?/gi;
+  const matches = [...userMessage.toLowerCase().matchAll(cantidadRegex)];
+
   let pedidoContext = "";
-  let totalPedido = 0;
-  let productosPedido = [];
+  let total = 0;
+  let resumen = [];
+  let pedido = [];
 
-  const cantidadRegex = /(\d+)\s*(unidades|unidad|metros|litros|tintas|metro|tinta|litro)?/gi;
-  const contienePalabra = (palabra) => new RegExp("\\b" + palabra + "\\b", "i").test(userMessage);
-  const contieneColor = ['magenta', 'cyan', 'amarillo', 'amarilla', 'negro', 'negra'].some(color => contienePalabra(color));
-  const contieneTinta = contienePalabra("tinta") || contienePalabra("tintas");
-  const contieneMarca = ['galaxy', 'eco'].some(marca => contienePalabra(marca));
+  for (const match of matches) {
+    const cantidad = parseInt(match[1]) || 1;
+    const color = match[2]?.replace("amarilla", "amarillo").replace("negra", "negro");
+    const marca = match[3]?.charAt(0).toUpperCase() + match[3]?.slice(1);
 
-  if (contieneTinta && !contieneColor && !contieneMarca) {
-    const tintas = products.filter(p => p.name.toLowerCase().includes("tinta") && p.stock > 0);
-    const porMarca = tintas.reduce((acc, item) => {
-      const marca = item.brand || (item.name.toLowerCase().includes("galaxy") ? "Galaxy" : item.name.toLowerCase().includes("eco") ? "Eco" : "Otra");
-      if (!acc[marca]) acc[marca] = [];
-      acc[marca].push(item);
-      return acc;
-    }, {});
+    const resultados = products.filter(p => {
+      return (
+        p.name.toLowerCase().includes(color) &&
+        (!marca || p.brand.toLowerCase() === marca.toLowerCase()) &&
+        p.stock >= cantidad
+      );
+    });
 
-    pedidoContext = "Tenemos tintas disponibles en los siguientes colores y marcas:\n";
-    for (const marca in porMarca) {
-      const colores = porMarca[marca].map(p => p.name.match(/tinta (\w+)/i)?.[1] || "").join(", ");
-      const precio = porMarca[marca][0].price;
-      pedidoContext += `- ${marca}: ${colores} (${precio} COP c/u)\n`;
+    if (resultados.length > 0) {
+      const producto = resultados[0];
+      const subtotal = producto.price * cantidad;
+      total += subtotal;
+      resumen.push(`- ${cantidad} x ${producto.name} (${producto.brand}): ${subtotal.toLocaleString()} COP`);
+      pedido.push({ name: producto.name, brand: producto.brand, cantidad, precio: producto.price });
     }
-  } else if (contieneTinta && contieneColor && !contieneMarca) {
-    const coloresDetectados = ['magenta', 'cyan', 'amarillo', 'amarilla', 'negro', 'negra'].filter(color => contienePalabra(color));
-    const opciones = products.filter(p => p.stock > 0 && coloresDetectados.some(color => p.name.toLowerCase().includes(color)));
-    const agrupadas = opciones.reduce((acc, item) => {
-      const marca = item.brand || (item.name.toLowerCase().includes("galaxy") ? "Galaxy" : item.name.toLowerCase().includes("eco") ? "Eco" : "Otra");
-      if (!acc[marca]) acc[marca] = [];
-      acc[marca].push(item);
-      return acc;
-    }, {});
+  }
 
-    pedidoContext = "Tenemos las siguientes opciones disponibles:\n";
-    for (const marca in agrupadas) {
-      agrupadas[marca].forEach(p => {
-        pedidoContext += `- ${p.name} (${marca}): ${p.price} COP\n`;
-      });
-    }
-  } else if (fuzzyResults.length > 0) {
-    const cantidadesDetectadas = [...userMessage.matchAll(cantidadRegex)];
+  if (pedido.length > 0) {
+    pedidoContext = `Resumen de tu pedido:\n${resumen.join("\n")}\nTotal: ${total.toLocaleString()} COP.\n¿Deseas añadir algo más o procedemos con los datos para el envío?`;
 
-    for (const match of cantidadesDetectadas) {
-      const cantidad = parseInt(match[1]);
-      const palabra = match[2] || "";
-      const palabras = userMessage.toLowerCase().split(/\s+/);
-      for (const producto of products) {
-        const nombre = producto.name.toLowerCase();
-        const coincidencia = palabras.every(p => nombre.includes(p));
-        if (coincidencia && producto.stock >= cantidad) {
-          const subtotal = producto.price * cantidad;
-          totalPedido += subtotal;
-          productosPedido.push({ nombre: producto.name, cantidad, precio: producto.price });
-        }
-      }
-    }
-
-    if (productosPedido.length > 0) {
-      pedidoContext = "Resumen de tu pedido:\n";
-      productosPedido.forEach(p => {
-        pedidoContext += `- ${p.cantidad} x ${p.nombre} a ${p.precio} COP = ${p.cantidad * p.precio} COP\n`;
-      });
-      pedidoContext += `Total: ${totalPedido} COP.\n`;
-      pedidoContext += `¿Deseas continuar con el pedido? Por favor indícame tu nombre completo, número de contacto y dirección para gestionar tu envío.`;
-
-      // Simulación de datos del cliente
-      const datosCliente = {
-        nombre: "José Carlos",
-        direccion: "Calle 15 con novena",
-        telefono: "123456789",
-        email: "jbas@alkd.com",
-        metodoPago: "transferencia bancaria"
-      };
-
-      await pedidoCollection.insertOne({
-        from,
-        nombre: datosCliente.nombre,
-        direccion: datosCliente.direccion,
-        telefono: datosCliente.telefono,
-        email: datosCliente.email,
-        metodoPago: datosCliente.metodoPago,
-        productos: productosPedido,
-        total: totalPedido,
-        fecha: new Date()
-      });
-    }
+    await orderCollection.insertOne({
+      from,
+      pedido,
+      total,
+      status: "pendiente_datos",
+      timestamp: new Date()
+    });
   }
 
   const messages = [
@@ -158,9 +112,8 @@ Distribuciones Galaxy se dedica a la venta de:
 
 Tu función es atender clientes profesionalmente, responder preguntas sobre productos, precios, existencias y ayudar a tomar pedidos.
 
-Aunque tengas capacidad para hablar de otros temas, no se te permite hacerlo. Solo puedes hablar del origen de tu nombre si el usuario lo pregunta. Puedes parafrasear que GaBo viene de la combinación de Gabriel y Bot, en honor a Gabriel un hermoso niño amado por sus padres. Muchos piensan que "Ga" viene de Galaxy y Bot, lo cual también resulta curioso ya que dicha sílaba coincide con "Ga".
+Si ya existe un pedido pendiente en MongoDB, y el cliente confirma que no desea agregar más productos, pide los datos completos de envío (nombre, dirección, teléfono, correo y método de pago). Luego responde agradeciendo la compra y prometiendo el envío de los datos para pago. 
 
-No debes hablar de otros temas fuera de este contexto, y siempre debes mantener un tono servicial, profesional y enfocado en el negocio de impresión y materiales gráficos.
 ${pedidoContext}`
     },
     ...previousMessages.reverse().map(m => ({ role: m.role, content: m.content })),
