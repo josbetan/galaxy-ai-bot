@@ -22,15 +22,13 @@ async function connectToDB() {
 }
 connectToDB();
 
-const pedidosTemporales = new Map();
-
 app.post("/webhook", async (req, res) => {
   const userMessage = req.body.Body || "";
   const from = req.body.From || "";
 
   const conversationCollection = db.collection("Conversations");
   const productCollection = db.collection("Products");
-  const pedidoCollection = db.collection("Pedidos");
+  const pedidoCollection = db.collection("Orders");
 
   const previousMessages = await conversationCollection
     .find({ from })
@@ -97,10 +95,11 @@ app.post("/webhook", async (req, res) => {
     }
   } else if (fuzzyResults.length > 0) {
     const cantidadesDetectadas = [...userMessage.matchAll(cantidadRegex)];
-    const palabras = userMessage.toLowerCase().split(/\s+/);
 
     for (const match of cantidadesDetectadas) {
       const cantidad = parseInt(match[1]);
+      const palabra = match[2] || "";
+      const palabras = userMessage.toLowerCase().split(/\s+/);
       for (const producto of products) {
         const nombre = producto.name.toLowerCase();
         const coincidencia = palabras.every(p => nombre.includes(p));
@@ -113,23 +112,34 @@ app.post("/webhook", async (req, res) => {
     }
 
     if (productosPedido.length > 0) {
-      pedidosTemporales.set(from, { productosPedido, totalPedido });
-
       pedidoContext = "Resumen de tu pedido:\n";
       productosPedido.forEach(p => {
         pedidoContext += `- ${p.cantidad} x ${p.nombre} a ${p.precio} COP = ${p.cantidad * p.precio} COP\n`;
       });
       pedidoContext += `Total: ${totalPedido} COP.\n`;
       pedidoContext += `¿Deseas continuar con el pedido? Por favor indícame tu nombre completo, número de contacto y dirección para gestionar tu envío.`;
+
+      // Simulación de datos del cliente
+      const datosCliente = {
+        nombre: "José Carlos",
+        direccion: "Calle 15 con novena",
+        telefono: "123456789",
+        email: "jbas@alkd.com",
+        metodoPago: "transferencia bancaria"
+      };
+
+      await pedidoCollection.insertOne({
+        from,
+        nombre: datosCliente.nombre,
+        direccion: datosCliente.direccion,
+        telefono: datosCliente.telefono,
+        email: datosCliente.email,
+        metodoPago: datosCliente.metodoPago,
+        productos: productosPedido,
+        total: totalPedido,
+        fecha: new Date()
+      });
     }
-  } else if (contienePalabra("si") && pedidosTemporales.has(from)) {
-    const { productosPedido, totalPedido } = pedidosTemporales.get(from);
-    pedidoContext = "Gracias por confirmar. Aquí tienes el resumen de tu pedido:\n";
-    productosPedido.forEach(p => {
-      pedidoContext += `- ${p.cantidad} x ${p.nombre} a ${p.precio} COP = ${p.cantidad * p.precio} COP\n`;
-    });
-    pedidoContext += `Total: ${totalPedido} COP.\n`;
-    pedidoContext += `Por favor, indícame tu nombre completo, número de contacto y dirección para gestionar tu envío.`;
   }
 
   const messages = [
