@@ -61,9 +61,8 @@ app.post("/webhook", async (req, res) => {
   const contieneColor = ['magenta', 'cyan', 'amarillo', 'amarilla', 'negro', 'negra'].some(color => contienePalabra(color));
   const contieneTinta = contienePalabra("tinta") || contienePalabra("tintas");
   const contieneMarca = ['galaxy', 'eco'].some(marca => contienePalabra(marca));
-  const preguntaPorTinta = ['que tintas', 'tienen tintas', 'hay tintas', 'que tintas venden'].some(p => userMessage.toLowerCase().includes(p));
 
-  if (preguntaPorTinta || (contieneTinta && !contieneColor && !contieneMarca)) {
+  if (contieneTinta && !contieneColor && !contieneMarca) {
     const tintas = products.filter(p => p.name.toLowerCase().includes("tinta") && p.stock > 0);
     const porMarca = tintas.reduce((acc, item) => {
       const marca = item.brand || (item.name.toLowerCase().includes("galaxy") ? "Galaxy" : item.name.toLowerCase().includes("eco") ? "Eco" : "Otra");
