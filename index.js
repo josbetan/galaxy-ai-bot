@@ -61,21 +61,30 @@ app.post("/webhook", async (req, res) => {
   const contieneColor = ['magenta', 'cyan', 'amarillo', 'amarilla', 'negro', 'negra'].some(color => contienePalabra(color));
   const contieneTinta = contienePalabra("tinta") || contienePalabra("tintas");
   const contieneMarca = ['galaxy', 'eco'].some(marca => contienePalabra(marca));
-  const contienePrecio = ['precio', 'cuánto vale', 'cuánto cuesta', 'qué valen', 'cuanto valen'].some(p => contienePalabra(p));
 
-  if ((contieneTinta && !contieneColor && !contieneMarca) || (contienePrecio && contieneTinta)) {
-    const tintas = products.filter(p => p.name.toLowerCase().includes("tinta") && p.stock > 0);
-    const porMarca = tintas.reduce((acc, item) => {
+  const preguntasSobreTintas = [
+    "que tintas tienen",
+    "que tintas manejan",
+    "que tintas venden",
+    "tienen tintas",
+    "hay tintas"
+  ];
+
+  const esPreguntaGeneralTintas = preguntasSobreTintas.some(frase => userMessage.toLowerCase().includes(frase));
+
+  if (esPreguntaGeneralTintas) {
+    const disponibles = products.filter(p => p.name.toLowerCase().includes("tinta") && p.stock > 0);
+    const agrupadas = disponibles.reduce((acc, item) => {
       const marca = item.brand || (item.name.toLowerCase().includes("galaxy") ? "Galaxy" : item.name.toLowerCase().includes("eco") ? "Eco" : "Otra");
       if (!acc[marca]) acc[marca] = [];
       acc[marca].push(item);
       return acc;
     }, {});
 
-    pedidoContext = "Tenemos tintas disponibles en los siguientes colores y marcas:\n";
-    for (const marca in porMarca) {
-      const colores = porMarca[marca].map(p => p.name.match(/tinta (\w+)/i)?.[1] || "").join(", ");
-      const precio = porMarca[marca][0].price;
+    pedidoContext = "En Distribuciones Galaxy manejamos tintas ecosolventes de las siguientes marcas y colores disponibles:\n";
+    for (const marca in agrupadas) {
+      const colores = agrupadas[marca].map(p => p.name.match(/tinta (\w+)/i)?.[1] || "").join(", ");
+      const precio = agrupadas[marca][0].price;
       pedidoContext += `- ${marca}: ${colores} (${precio} COP c/u)\n`;
     }
   } else if (contieneTinta && contieneColor && !contieneMarca) {
@@ -99,7 +108,6 @@ app.post("/webhook", async (req, res) => {
 
     for (const match of cantidadesDetectadas) {
       const cantidad = parseInt(match[1]);
-      const palabra = match[2] || "";
       const palabras = userMessage.toLowerCase().split(/\s+/);
       for (const producto of products) {
         const nombre = producto.name.toLowerCase();
@@ -128,7 +136,7 @@ app.post("/webhook", async (req, res) => {
       content: `Eres GaBo, el asistente virtual de Distribuciones Galaxy. Siempre debes iniciar saludando de forma amable, diciendo tu nombre y que eres el asistente virtual de Distribuciones Galaxy.
 
 Distribuciones Galaxy se dedica a la venta de:
-- Tintas ecosolventes marca Galaxy
+- Tintas ecosolventes marca Galaxy y Eco
 - Vinilos para impresoras de gran formato
 - Vinilos textiles
 - Banners
