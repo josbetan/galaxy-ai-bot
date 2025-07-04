@@ -2,9 +2,9 @@
     "name": "galaxy-ai-bot",
     "version": "1.0.0",
     "description": "Bot inteligente para WhatsApp usando Twilio y OpenAI",
-    "main": "app.js",
+    "main": "index.js",
     "scripts": {
-        "start": "node app.js"
+        "start": "node index.js"
     },
     "dependencies": {
         "axios": "^1.10.0",
