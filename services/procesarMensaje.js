@@ -29,6 +29,14 @@ module.exports = function procesarMensaje(userMessage, products) {
     includeScore: true
   });
 
+  const cantidadRegex = /(\d+)\s*(litros?|unidades?|frasco|frascos)?/gi;
+  let cantidadesDetectadas = [...userMessage.matchAll(cantidadRegex)];
+
+  // Si no hay cantidades explícitas, pero piden una tinta → asumimos 1 unidad
+  if (cantidadesDetectadas.length === 0 && contieneTinta && /una|un/i.test(userMessage)) {
+    cantidadesDetectadas = [["1", "unidad"]];
+  }
+
   // --- CASO 1: Solo preguntan por tinta sin marca ni color ---
   if (contieneTinta && !contieneColor && !contieneMarca) {
     const productosConStock = products.filter(p => p.stock > 0);
@@ -78,15 +86,36 @@ module.exports = function procesarMensaje(userMessage, products) {
     return respuesta.trim();
   }
 
-  // --- CASO 3: Fuzzy search general ---
+  // --- CASO 3: Fuzzy search general con cantidades ---
   const fuzzyResults = fuse.search(cleanedMessage);
   if (fuzzyResults.length > 0) {
     const coincidencias = fuzzyResults.map(r => r.item).filter(p => p.stock > 0);
+
     if (coincidencias.length === 0) {
       return "No encontré productos con esas características en este momento.";
     }
 
-    let respuesta = "Esto es lo que encontré disponible según lo que me indicaste:\n\n";
+    // Si hay cantidades y coincidencias, armamos resumen de pedido
+    if (cantidadesDetectadas.length > 0) {
+      let total = 0;
+      let resumen = "Resumen de tu pedido:\n\n";
+
+      for (const match of cantidadesDetectadas) {
+        const cantidad = parseInt(match[1]);
+        const unidad = match[2] || "unidad";
+
+        for (const producto of coincidencias) {
+          resumen += `- ${cantidad} ${unidad}(s) de ${producto.name} a ${producto.price} COP = ${cantidad * producto.price} COP\n`;
+          total += cantidad * producto.price;
+        }
+      }
+
+      resumen += `\nTotal: ${total} COP.\n¿Deseas continuar con el pedido?`;
+      return resumen;
+    }
+
+    // Si no hay cantidades, solo muestra opciones
+    let respuesta = "Esto es lo que encontré disponible:\n\n";
     coincidencias.forEach(p => {
       respuesta += `- ${p.name}: ${p.price} COP (${p.unit})\n`;
     });
