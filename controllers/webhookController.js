@@ -1,5 +1,5 @@
 const axios = require("axios");
-const { procesarMensaje } = require("../services/procesarMensaje");
+const procesarMensaje = require("../services/procesarMensaje");
 const { MongoClient } = require("mongodb");
 
 let db;
