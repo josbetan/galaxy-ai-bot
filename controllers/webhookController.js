@@ -36,10 +36,12 @@ async function webhookHandler(req, res) {
     const products = await productCollection.find({ type: "tinta" }).toArray();
     const pedidoContext = procesarMensaje(userMessage, products);
 
-    const messages = [
-      {
-        role: "system",
-        content: `Eres GaBo, el asistente virtual de Distribuciones Galaxy. Siempre debes iniciar saludando con: "¡Hola! Soy GaBo, el asistente virtual de Distribuciones Galaxy. ¿En qué puedo ayudarte hoy?"
+    const primerSaludo =
+      previousMessages.length === 0
+        ? "¡Hola! Soy GaBo, el asistente virtual de Distribuciones Galaxy. ¿En qué puedo ayudarte hoy?"
+        : "";
+
+    const systemPrompt = `${primerSaludo}
 
 Distribuciones Galaxy se dedica a la venta de:
 - Tintas ecosolventes marca Galaxy
@@ -54,16 +56,18 @@ Tu función es atender clientes profesionalmente, responder preguntas sobre prod
 
 Aunque tengas capacidad para hablar de otros temas, no se te permite hacerlo. Solo puedes hablar del origen de tu nombre si el usuario lo pregunta. Puedes parafrasear que GaBo viene de la combinación de Gabriel y Bot, en honor a Gabriel un hermoso niño amado por sus padres. Muchos piensan que "Ga" viene de Galaxy y Bot, lo cual también resulta curioso ya que dicha sílaba coincide con "Ga".
 
-No debes hablar de otros temas fuera de este contexto, y siempre debes mantener un tono servicial, profesional y enfocado en el negocio de impresión y materiales gráficos.`
+No debes hablar de otros temas fuera de este contexto, y siempre debes mantener un tono servicial, profesional y enfocado en el negocio de impresión y materiales gráficos.
+`;
+
+    const messages = [
+      {
+        role: "system",
+        content: `${systemPrompt}\n${pedidoContext}`
       },
-      ...previousMessages.reverse().map(m => ({
+      ...previousMessages.reverse().map((m) => ({
         role: m.role,
         content: m.content
       })),
-      {
-        role: "user",
-        content: pedidoContext
-      },
       {
         role: "user",
         content: userMessage
