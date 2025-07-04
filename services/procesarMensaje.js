@@ -10,7 +10,7 @@ function normalizarTexto(texto) {
     .sort()
     .join(" ");
 }
-
+// Actualización menor para forzar despliegue
 function contienePalabra(palabra, mensaje) {
   return new RegExp("\\b" + palabra + "\\b", "i").test(mensaje);
 }
