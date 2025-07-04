@@ -42,7 +42,6 @@ app.post("/webhook", async (req, res) => {
     .toLowerCase()
     .normalize("NFD").replace(/[̀-ͯ]/g, "")
     .replace(/[^\w\s]/g, "")
-    .replace(/(\w)\1{2,}/g, '$1') // Corrige repeticiones excesivas como "ttinta"
     .split(/\s+/)
     .sort()
     .join(" ");
