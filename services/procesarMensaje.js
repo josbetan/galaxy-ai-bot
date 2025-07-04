@@ -1,72 +1,97 @@
 const Fuse = require("fuse.js");
-const { limpiarTexto, contienePalabra } = require("../utils/helpers");
 
-function procesarMensaje(userMessage, products) {
-  const cleanedUserMessage = limpiarTexto(userMessage);
+function normalizarTexto(texto) {
+  return texto
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // eliminar acentos
+    .replace(/[^\w\s]/g, "") // eliminar caracteres raros
+    .split(/\s+/)
+    .sort()
+    .join(" ");
+}
+
+function contienePalabra(palabra, mensaje) {
+  return new RegExp("\\b" + palabra + "\\b", "i").test(mensaje);
+}
+
+module.exports = function procesarMensaje(userMessage, products) {
+  const cleanedMessage = normalizarTexto(userMessage);
+  const colores = ["magenta", "cyan", "amarillo", "amarilla", "negro", "negra"];
+  const marcas = ["galaxy", "eco"];
+  const contieneColor = colores.some(color => contienePalabra(color, userMessage));
+  const contieneTinta = contienePalabra("tinta", userMessage) || contienePalabra("tintas", userMessage);
+  const contieneMarca = marcas.some(marca => contienePalabra(marca, userMessage));
 
   const fuse = new Fuse(products, {
     keys: ['searchIndex'],
     threshold: 0.4,
+    includeScore: true
   });
 
-  const fuzzyResults = fuse.search(cleanedUserMessage);
-  const cantidadRegex = /(\d+)\s*(unidades|unidad|metros|litros|tintas|metro|tinta|litro)?/gi;
-
-  let pedidoContext = "";
-  let totalPedido = 0;
-  let productosPedido = [];
-
-  const contieneColor = ['magenta', 'cyan', 'amarillo', 'amarilla', 'negro', 'negra']
-    .some(color => contienePalabra(color, userMessage));
-  const contieneTinta = contienePalabra("tinta", userMessage) || contienePalabra("tintas", userMessage);
-  const contieneMarca = ['galaxy', 'eco']
-    .some(marca => contienePalabra(marca, userMessage));
-
-  if ((contieneTinta && !contieneColor && !contieneMarca) || (!contieneTinta && contieneColor && !contieneMarca)) {
-    const coloresDetectados = ['magenta', 'cyan', 'amarillo', 'amarilla', 'negro', 'negra']
-      .filter(color => contienePalabra(color, userMessage));
-    const opciones = products.filter(p => p.stock > 0 &&
-      coloresDetectados.some(color => p.name.toLowerCase().includes(color)));
-
-    const agrupadas = opciones.reduce((acc, item) => {
-      const marca = item.brand || (item.name.toLowerCase().includes("galaxy") ? "Galaxy" : item.name.toLowerCase().includes("eco") ? "Eco" : "Otra");
-      if (!acc[marca]) acc[marca] = [];
-      acc[marca].push(item);
+  // --- CASO 1: Solo preguntan por tinta sin marca ni color ---
+  if (contieneTinta && !contieneColor && !contieneMarca) {
+    const productosConStock = products.filter(p => p.stock > 0);
+    if (productosConStock.length === 0) {
+      return "Actualmente no tenemos tintas disponibles en stock. Notificaremos a bodega y te informaremos tan pronto lleguen.";
+    }
+    const agrupadas = productosConStock.reduce((acc, p) => {
+      if (!acc[p.brand]) acc[p.brand] = [];
+      acc[p.brand].push(p);
       return acc;
     }, {});
 
-    pedidoContext = "Tenemos las siguientes opciones disponibles:\n";
+    let respuesta = "Claro, contamos con tintas disponibles:\n\n";
     for (const marca in agrupadas) {
+      respuesta += `Marca ${marca}:\n`;
       agrupadas[marca].forEach(p => {
-        pedidoContext += `- ${p.name} (${marca}): ${p.price} COP\n`;
+        respuesta += `- ${p.color} (${p.unit}): ${p.price} COP\n`;
       });
+      respuesta += "\n";
     }
-  } else if (fuzzyResults.length > 0) {
-    const cantidadesDetectadas = [...userMessage.matchAll(cantidadRegex)];
-    for (const match of cantidadesDetectadas) {
-      const cantidad = parseInt(match[1]);
-      const palabras = userMessage.toLowerCase().split(/\s+/);
-      for (const producto of products) {
-        const nombre = producto.name.toLowerCase();
-        const coincidencia = palabras.every(p => nombre.includes(p));
-        if (coincidencia && producto.stock >= cantidad) {
-          const subtotal = producto.price * cantidad;
-          totalPedido += subtotal;
-          productosPedido.push({ nombre: producto.name, cantidad, precio: producto.price });
-        }
-      }
-    }
-
-    if (productosPedido.length > 0) {
-      pedidoContext = "Resumen de tu pedido:\n";
-      productosPedido.forEach(p => {
-        pedidoContext += `- ${p.cantidad} x ${p.nombre} a ${p.precio} COP = ${p.cantidad * p.precio} COP\n`;
-      });
-      pedidoContext += `Total: ${totalPedido} COP.\n¿Deseas continuar con el pedido? Por favor indícame tu nombre completo, número de contacto y dirección para gestionar tu envío.`;
-    }
+    return respuesta.trim();
   }
 
-  return pedidoContext;
-}
+  // --- CASO 2: Solo mencionan un color ---
+  if (!contieneTinta && contieneColor && !contieneMarca) {
+    const coloresDetectados = colores.filter(color => contienePalabra(color, userMessage));
+    const productosFiltrados = products.filter(p =>
+      coloresDetectados.includes(p.color.toLowerCase()) && p.stock > 0
+    );
 
-module.exports = { procesarMensaje };
+    if (productosFiltrados.length === 0) {
+      return "Por el momento no tenemos disponibilidad para ese color. Notificaremos a bodega y te informaremos cuando llegue.";
+    }
+
+    const agrupadas = productosFiltrados.reduce((acc, p) => {
+      if (!acc[p.brand]) acc[p.brand] = [];
+      acc[p.brand].push(p);
+      return acc;
+    }, {});
+
+    let respuesta = `Sí, tenemos tinta en color ${coloresDetectados.join(" y ")} disponible en estas marcas:\n\n`;
+    for (const marca in agrupadas) {
+      agrupadas[marca].forEach(p => {
+        respuesta += `- ${p.color} (${marca}): ${p.price} COP\n`;
+      });
+    }
+    return respuesta.trim();
+  }
+
+  // --- CASO 3: Fuzzy search general ---
+  const fuzzyResults = fuse.search(cleanedMessage);
+  if (fuzzyResults.length > 0) {
+    const coincidencias = fuzzyResults.map(r => r.item).filter(p => p.stock > 0);
+    if (coincidencias.length === 0) {
+      return "No encontré productos con esas características en este momento.";
+    }
+
+    let respuesta = "Esto es lo que encontré disponible según lo que me indicaste:\n\n";
+    coincidencias.forEach(p => {
+      respuesta += `- ${p.name}: ${p.price} COP (${p.unit})\n`;
+    });
+    return respuesta.trim();
+  }
+
+  return "¿Podrías darme un poco más de información sobre lo que estás buscando? Estoy aquí para ayudarte con tus pedidos de impresión y materiales gráficos.";
+};
