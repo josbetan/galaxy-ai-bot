@@ -63,7 +63,7 @@ app.post("/webhook", async (req, res) => {
   const contieneMarca = ['galaxy', 'eco'].some(marca => contienePalabra(marca));
 
   if (contieneTinta && !contieneColor && !contieneMarca) {
-    const tintas = products.filter(p => p.name.toLowerCase().includes("tinta") && p.stock > 0);
+    const tintas = products.filter(p => p.name.toLowerCase().includes("tinta") && parseInt(p.stock) > 0);
     const porMarca = tintas.reduce((acc, item) => {
       const marca = item.brand || (item.name.toLowerCase().includes("galaxy") ? "Galaxy" : item.name.toLowerCase().includes("eco") ? "Eco" : "Otra");
       if (!acc[marca]) acc[marca] = [];
@@ -79,7 +79,7 @@ app.post("/webhook", async (req, res) => {
     }
   } else if (contieneTinta && contieneColor && !contieneMarca) {
     const coloresDetectados = ['magenta', 'cyan', 'amarillo', 'amarilla', 'negro', 'negra'].filter(color => contienePalabra(color));
-    const opciones = products.filter(p => p.stock > 0 && coloresDetectados.some(color => p.name.toLowerCase().includes(color)));
+    const opciones = products.filter(p => parseInt(p.stock) > 0 && coloresDetectados.some(color => p.name.toLowerCase().includes(color)));
     const agrupadas = opciones.reduce((acc, item) => {
       const marca = item.brand || (item.name.toLowerCase().includes("galaxy") ? "Galaxy" : item.name.toLowerCase().includes("eco") ? "Eco" : "Otra");
       if (!acc[marca]) acc[marca] = [];
@@ -98,21 +98,24 @@ app.post("/webhook", async (req, res) => {
 
     for (const match of cantidadesDetectadas) {
       const cantidad = parseInt(match[1]);
-      const palabra = match[2] || "";
       const palabras = userMessage.toLowerCase().split(/\s+/);
       for (const producto of products) {
         const nombre = producto.name.toLowerCase();
         const coincidencia = palabras.every(p => nombre.includes(p));
-        if (coincidencia && producto.stock >= cantidad) {
-          const subtotal = producto.price * cantidad;
-          totalPedido += subtotal;
-          productosPedido.push({ nombre: producto.name, cantidad, precio: producto.price });
+        if (coincidencia) {
+          if (parseInt(producto.stock) >= cantidad) {
+            const subtotal = producto.price * cantidad;
+            totalPedido += subtotal;
+            productosPedido.push({ nombre: producto.name, cantidad, precio: producto.price });
+          } else {
+            pedidoContext += `El producto "${producto.name}" no está disponible actualmente en la cantidad solicitada. ¿Podrías dejar tu número de contacto para informarte cuando tengamos disponibilidad?\n`;
+          }
         }
       }
     }
 
     if (productosPedido.length > 0) {
-      pedidoContext = "Resumen de tu pedido:\n";
+      pedidoContext += "Resumen de tu pedido:\n";
       productosPedido.forEach(p => {
         pedidoContext += `- ${p.cantidad} x ${p.nombre} a ${p.precio} COP = ${p.cantidad * p.precio} COP\n`;
       });
