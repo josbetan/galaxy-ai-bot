@@ -13,7 +13,7 @@ async function conectarMongo(uri) {
   db = client.db("Galaxy");
   conversationCollection = db.collection("Conversations");
   productCollection = db.collection("Products");
-  console.log("Conectado a MongoDB");
+  console.log("✅ Conectado a MongoDB");
 }
 
 async function webhookHandler(req, res) {
@@ -26,6 +26,7 @@ async function webhookHandler(req, res) {
   const from = req.body.From || "";
 
   try {
+    // Recuperar historial de ese número
     const previousMessages = await conversationCollection
       .find({ from })
       .sort({ timestamp: -1 })
@@ -35,32 +36,28 @@ async function webhookHandler(req, res) {
     const products = await productCollection.find({ type: "tinta" }).toArray();
     const pedidoContext = procesarMensaje(userMessage, products);
 
-    const primerSaludo =
-      previousMessages.length === 0
-        ? "¡Hola! Soy GaBo, el asistente virtual de Distribuciones Galaxy. ¿En qué puedo ayudarte hoy?"
-        : "";
-
+    // Prompt que guía a GaBo
     const systemPrompt = `Eres GaBo, el asistente virtual de Distribuciones Galaxy.
 
-Distribuciones Galaxy se dedica a la venta de:
+Distribuciones Galaxy vende:
 - Tintas ecosolventes marca Galaxy
-- Vinilos para impresoras de gran formato
-- Vinilos textiles
+- Vinilos
 - Banners
+- Vinilos textiles
 - Repuestos
 - Impresoras de gran formato
-- Otros productos relacionados con impresión y materiales gráficos
 
-Tu función es atender clientes profesionalmente, responder preguntas sobre productos, precios, existencias y ayudar a tomar pedidos.
+Tu tarea es atender clientes profesionalmente, responder preguntas sobre productos, precios, existencias y ayudarles con pedidos.
 
-Aunque tengas capacidad para hablar de otros temas, no se te permite hacerlo. Solo puedes hablar del origen de tu nombre si el usuario lo pregunta. Puedes parafrasear que GaBo viene de la combinación de Gabriel y Bot, en honor a Gabriel un hermoso niño amado por sus padres. Muchos piensan que "Ga" viene de Galaxy y Bot, lo cual también resulta curioso ya que dicha sílaba coincide con "Ga".
+Si el cliente está escribiendo por primera vez y su mensaje es un saludo como "hola", "buenas", "hello", etc., preséntate con este mensaje:
+"¡Hola! Soy GaBo, el asistente virtual de Distribuciones Galaxy. ¿En qué puedo ayudarte hoy?"
 
-No debes hablar de otros temas fuera de este contexto, y siempre debes mantener un tono servicial, profesional y enfocado en el negocio de impresión y materiales gráficos.`;
+No hables de otros temas fuera del negocio. Sé profesional, servicial y enfocado en impresión y materiales gráficos.`;
 
     const messages = [
       {
         role: "system",
-        content: `${primerSaludo}\n\n${systemPrompt}\n\n${pedidoContext}`
+        content: `${systemPrompt}\n\n${pedidoContext}`
       },
       ...previousMessages.reverse().map((m) => ({
         role: m.role,
@@ -72,6 +69,7 @@ No debes hablar de otros temas fuera de este contexto, y siempre debes mantener 
       }
     ];
 
+    // Guardar mensaje entrante
     await conversationCollection.insertOne({
       from,
       role: "user",
@@ -79,6 +77,7 @@ No debes hablar de otros temas fuera de este contexto, y siempre debes mantener 
       timestamp: new Date()
     });
 
+    // Enviar a OpenAI
     const response = await axios.post(
       "https://api.openai.com/v1/chat/completions",
       {
@@ -95,6 +94,7 @@ No debes hablar de otros temas fuera de este contexto, y siempre debes mantener 
 
     const reply = response.data.choices[0].message.content;
 
+    // Guardar respuesta
     await conversationCollection.insertOne({
       from,
       role: "assistant",
@@ -105,7 +105,7 @@ No debes hablar de otros temas fuera de este contexto, y siempre debes mantener 
     res.set("Content-Type", "text/plain");
     return res.send(reply);
   } catch (err) {
-    console.error("Error en webhookHandler:", err.message);
+    console.error("❌ Error en webhookHandler:", err.message);
     res.status(500).send("Ocurrió un error. Intenta más tarde.");
   }
 }
