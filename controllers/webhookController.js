@@ -1,3 +1,4 @@
+/* global process */
 const axios = require("axios");
 const procesarMensaje = require("../services/procesarMensaje");
 const { MongoClient } = require("mongodb");
@@ -5,7 +6,6 @@ const { MongoClient } = require("mongodb");
 let db;
 let conversationCollection;
 let productCollection;
-let pedidoCollection;
 
 async function conectarMongo(uri) {
   const client = new MongoClient(uri);
@@ -13,7 +13,6 @@ async function conectarMongo(uri) {
   db = client.db("Galaxy");
   conversationCollection = db.collection("Conversations");
   productCollection = db.collection("Products");
-  pedidoCollection = db.collection("Pedidos");
   console.log("Conectado a MongoDB");
 }
 
@@ -41,7 +40,7 @@ async function webhookHandler(req, res) {
         ? "¡Hola! Soy GaBo, el asistente virtual de Distribuciones Galaxy. ¿En qué puedo ayudarte hoy?"
         : "";
 
-    const systemPrompt = `${primerSaludo}
+    const systemPrompt = `Eres GaBo, el asistente virtual de Distribuciones Galaxy.
 
 Distribuciones Galaxy se dedica a la venta de:
 - Tintas ecosolventes marca Galaxy
@@ -56,13 +55,12 @@ Tu función es atender clientes profesionalmente, responder preguntas sobre prod
 
 Aunque tengas capacidad para hablar de otros temas, no se te permite hacerlo. Solo puedes hablar del origen de tu nombre si el usuario lo pregunta. Puedes parafrasear que GaBo viene de la combinación de Gabriel y Bot, en honor a Gabriel un hermoso niño amado por sus padres. Muchos piensan que "Ga" viene de Galaxy y Bot, lo cual también resulta curioso ya que dicha sílaba coincide con "Ga".
 
-No debes hablar de otros temas fuera de este contexto, y siempre debes mantener un tono servicial, profesional y enfocado en el negocio de impresión y materiales gráficos.
-`;
+No debes hablar de otros temas fuera de este contexto, y siempre debes mantener un tono servicial, profesional y enfocado en el negocio de impresión y materiales gráficos.`;
 
     const messages = [
       {
         role: "system",
-        content: `${systemPrompt}\n${pedidoContext}`
+        content: `${primerSaludo}\n\n${systemPrompt}\n\n${pedidoContext}`
       },
       ...previousMessages.reverse().map((m) => ({
         role: m.role,
