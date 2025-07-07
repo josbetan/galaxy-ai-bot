@@ -1,3 +1,4 @@
+/* eslint-env node */
 const Fuse = require("fuse.js");
 
 function normalizarTexto(texto) {
