@@ -37,7 +37,7 @@ async function webhookHandler(req, res) {
     const pedidoContext = procesarMensaje(userMessage, products);
 
     // Prompt que guía a GaBo
-    const systemPrompt = `Eres GaBo, el asistente virtual de Distribuciones Galaxy.
+    const systemPrompt = `Eres GaBo, el asistente virtual de Distribuciones Galaxy. Debes saludar a los clientes por primera vez como: ¡Hola! Soy GaBo, el asistente virtual de Distribuciones Galaxy. ¿En qué puedo ayudarte hoy?
 
 Distribuciones Galaxy se dedica a la venta de:
 - Tintas ecosolventes marca Galaxy
