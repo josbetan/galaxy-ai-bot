@@ -1,99 +1,112 @@
 /* eslint-env node */
-const { getCollection } = require("../utils/mongo");
-const { formatearMensaje, extraerCantidadYColor, esPedidoValido } = require("../utils/helpers");
-const { enviarPDF, enviarImagen, enviarMensaje, enviarCorreoPedido } = require("../services/respuestas");
-const { analizarConOpenAI } = require("../services/openai");
-const { esSaludo } = require("./detectarSaludo");
+const Fuse = require("fuse.js");
 
-const MAX_MENSAJES = 20;
-
-async function procesarMensaje(mensaje, numero) {
-  const conversaciones = getCollection("conversations");
-  const productos = getCollection("products");
-  const pedidos = getCollection("orders");
-
-  // Cargar historial
-  let historial = await conversaciones.findOne({ numero });
-
-  if (!historial) {
-    historial = { numero, mensajes: [] };
-    await conversaciones.insertOne(historial);
-  }
-
-  historial.mensajes.push({ rol: "usuario", contenido: mensaje });
-
-  if (historial.mensajes.length > MAX_MENSAJES) {
-    historial.mensajes = historial.mensajes.slice(-MAX_MENSAJES);
-  }
-
-  await conversaciones.updateOne({ numero }, { $set: { mensajes: historial.mensajes } });
-
-  // Verificar saludo inicial
-  if (esSaludo(mensaje) && historial.mensajes.length === 1) {
-    const saludo = "¡Hola! Soy GaBo, el asistente virtual de Distribuciones Galaxy. ¿En qué puedo ayudarte hoy?";
-    await enviarMensaje(numero, saludo);
-    historial.mensajes.push({ rol: "asistente", contenido: saludo });
-    await conversaciones.updateOne({ numero }, { $set: { mensajes: historial.mensajes } });
-    return;
-  }
-
-  // Analizar con OpenAI
-  const respuestaIA = await analizarConOpenAI(historial.mensajes);
-
-  // Si el cliente pregunta por tintas, mostramos info y PDF
-  if (/tinta/i.test(mensaje)) {
-    const resultados = await productos.find({ type: "tinta" }).toArray();
-
-    if (resultados.length > 0) {
-      const texto = resultados
-        .map((prod) => `Marca: ${prod.brand}, Color: ${prod.color}, Precio: $${prod.price}`)
-        .join("\n");
-
-      await enviarMensaje(numero, `Estas son nuestras tintas disponibles:\n${texto}`);
-      await enviarPDF(numero, "https://tudominio.com/catalogo/tintas.pdf"); // ajustar la URL real
-      return;
-    } else {
-      await enviarMensaje(numero, "Actualmente no contamos con tintas disponibles.");
-      return;
-    }
-  }
-
-  // Detectar si es un pedido
-  const pedido = extraerCantidadYColor(mensaje);
-  if (pedido && pedido.length > 0) {
-    let pendientes = [];
-
-    for (let item of pedido) {
-      const producto = await productos.findOne({
-        color: item.color,
-        type: "tinta",
-        stock: { $gte: parseInt(item.cantidad) },
-      });
-
-      if (!producto) {
-        pendientes.push(item);
-      }
-    }
-
-    if (pendientes.length > 0) {
-      await enviarMensaje(numero, "Estamos verificando el inventario de algunos productos. Mientras tanto, ¿deseas agregar algo más?");
-      // Aquí podrías enviar un correo o alerta interna
-      return;
-    }
-
-    const total = pedido.reduce((acc, item) => acc + item.cantidad * item.precio, 0);
-    await enviarMensaje(numero, `El total de tu pedido es $${total}. Puedes pagar por transferencia. Por favor envía el comprobante aquí mismo para continuar.`);
-
-    // Guardar pedido preliminar
-    await pedidos.insertOne({ numero, pedido, total, confirmado: false });
-
-    return;
-  }
-
-  // Responder con OpenAI si no fue ninguna de las anteriores
-  await enviarMensaje(numero, respuestaIA);
-  historial.mensajes.push({ rol: "asistente", contenido: respuestaIA });
-  await conversaciones.updateOne({ numero }, { $set: { mensajes: historial.mensajes } });
+function normalizarTexto(texto) {
+  return texto
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // quitar acentos
+    .replace(/[^\w\s]/g, "") // quitar signos
+    .split(/\s+/)
+    .sort()
+    .join(" ");
 }
 
-module.exports = { procesarMensaje };
+function contienePalabra(palabra, mensaje) {
+  return new RegExp("\\b" + palabra + "\\b", "i").test(mensaje);
+}
+
+function detectarCantidad(texto) {
+  const match = texto.match(/\b(una|un|1|dos|2|tres|3|cuatro|4|cinco|5)\b/i);
+  if (!match) return 1;
+  const mapa = {
+    una: 1, un: 1, "1": 1,
+    dos: 2, "2": 2,
+    tres: 3, "3": 3,
+    cuatro: 4, "4": 4,
+    cinco: 5, "5": 5
+  };
+  return mapa[match[0].toLowerCase()] || 1;
+}
+
+module.exports = function procesarMensaje(userMessage, products) {
+  const cleanedMessage = normalizarTexto(userMessage);
+  const colores = ["magenta", "cyan", "amarillo", "amarilla", "negro", "negra"];
+  const marcas = ["galaxy", "eco"];
+  const contieneColor = colores.some(color => contienePalabra(color, userMessage));
+  const contieneTinta = contienePalabra("tinta", userMessage) || contienePalabra("tintas", userMessage);
+  const contieneMarca = marcas.some(marca => contienePalabra(marca, userMessage));
+  const cantidad = detectarCantidad(userMessage);
+
+  const fuse = new Fuse(products, {
+    keys: ['searchIndex', 'color', 'brand'],
+    threshold: 0.4,
+    includeScore: true
+  });
+
+  // 🟩 CASO 1: Pregunta general sin especificar marca ni color
+  if (contieneTinta && !contieneColor && !contieneMarca) {
+    const productosConStock = products.filter(p => p.stock > 0);
+    if (productosConStock.length === 0) {
+      return "Actualmente no tenemos tintas disponibles en stock. Notificaremos a bodega y te informaremos tan pronto lleguen.";
+    }
+
+    const agrupadas = productosConStock.reduce((acc, p) => {
+      if (!acc[p.brand]) acc[p.brand] = [];
+      acc[p.brand].push(p);
+      return acc;
+    }, {});
+
+    let respuesta = "Sí, en Distribuciones Galaxy contamos con tintas ecosolventes de las marcas Galaxy y Eco disponibles en varios colores. A continuación, te detallo los precios por litro:\n\n";
+    for (const marca in agrupadas) {
+      respuesta += `Marca ${marca}:\n`;
+      agrupadas[marca].forEach(p => {
+        respuesta += `- ${p.color}: ${p.price} COP\n`;
+      });
+      respuesta += "\n";
+    }
+    return respuesta.trim();
+  }
+
+  // 🟩 CASO 2: Solo mencionan un color
+  if (!contieneTinta && contieneColor && !contieneMarca) {
+    const coloresDetectados = colores.filter(color => contienePalabra(color, userMessage));
+    const productosFiltrados = products.filter(p =>
+      coloresDetectados.includes(p.color.toLowerCase()) && p.stock > 0
+    );
+
+    if (productosFiltrados.length === 0) {
+      return "Por el momento no tenemos disponibilidad para ese color. Notificaremos a bodega y te informaremos cuando llegue.";
+    }
+
+    const agrupadas = productosFiltrados.reduce((acc, p) => {
+      if (!acc[p.brand]) acc[p.brand] = [];
+      acc[p.brand].push(p);
+      return acc;
+    }, {});
+
+    let respuesta = `Sí, tenemos tinta en color ${coloresDetectados.join(" y ")} disponible en estas marcas:\n\n`;
+    for (const marca in agrupadas) {
+      agrupadas[marca].forEach(p => {
+        respuesta += `- ${p.color} (${marca}): ${p.price} COP\n`;
+      });
+    }
+    return respuesta.trim();
+  }
+
+  // 🟩 CASO 3: Fuzzy match general (tinta + marca + color + cantidad)
+  const fuzzyResults = fuse.search(cleanedMessage);
+  if (fuzzyResults.length > 0) {
+    const coincidencias = fuzzyResults.map(r => r.item).filter(p => p.stock > 0);
+
+    if (coincidencias.length === 0) {
+      return "No encontré productos con esas características en este momento.";
+    }
+
+    const seleccion = coincidencias[0]; // solo uno
+    return `Confirmo que deseas ${cantidad} unidad(es) de tinta ${seleccion.color} ${seleccion.brand} (${seleccion.unit}) a ${seleccion.price} COP cada una. ¿Deseas que procese tu pedido?`;
+  }
+
+  // 🟥 Si no entiende
+  return "¿Podrías darme un poco más de información sobre lo que estás buscando? Estoy aquí para ayudarte con tus pedidos de impresión y materiales gráficos.";
+};

@@ -2,37 +2,46 @@
 const { MongoClient } = require("mongodb");
 
 let db;
-let collections = {};
 
 async function conectarMongo() {
-  try {
-    const client = new MongoClient(process.env.MONGODB_URI);
-    await client.connect();
-    db = client.db("Galaxy");
-
-    collections.conversations = db.collection("Conversations");
-    collections.products = db.collection("Products");
-    collections.orders = db.collection("Orders");
-
-    console.log("✅ Conectado a MongoDB correctamente");
-  } catch (error) {
-    console.error("❌ Error conectando a MongoDB:", error.message);
-    process.exit(1);
-  }
-}
-
-function getDB() {
-  if (!db) throw new Error("DB no conectada");
+  if (db) return db;
+  const client = new MongoClient(process.env.MONGODB_URI);
+  await client.connect();
+  db = client.db("Galaxy");
+  console.log("✅ Conectado a MongoDB");
   return db;
 }
 
-function getCollection(nombre) {
-  if (!collections[nombre]) throw new Error(`Colección ${nombre} no encontrada`);
-  return collections[nombre];
+function getDB() {
+  if (!db) throw new Error("❌ MongoDB no está conectado");
+  return db;
+}
+
+async function obtenerHistorial(from, limite = 20) {
+  return await getDB()
+    .collection("Conversations")
+    .find({ from })
+    .sort({ timestamp: -1 })
+    .limit(limite)
+    .toArray();
+}
+
+async function guardarMensaje(from, role, content) {
+  await getDB().collection("Conversations").insertOne({
+    from,
+    role,
+    content,
+    timestamp: new Date()
+  });
+}
+
+async function obtenerProductos() {
+  return await getDB().collection("Products").find({}).toArray();
 }
 
 module.exports = {
   conectarMongo,
-  getDB,
-  getCollection,
+  obtenerHistorial,
+  guardarMensaje,
+  obtenerProductos
 };
